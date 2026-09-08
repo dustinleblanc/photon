@@ -2,6 +2,7 @@ package proton
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"github.com/go-resty/resty/v2"
@@ -39,6 +40,10 @@ func (c *Client) ListPhotos(ctx context.Context, volumeID string, lastID string,
 		return req.Get("/drive/volumes/" + volumeID + "/photos")
 	}); err != nil {
 		return nil, err
+	}
+
+	if res.Code != int(SuccessCode) {
+		return nil, fmt.Errorf("ListPhotos: unexpected response code %d", res.Code)
 	}
 
 	return res.Photos, nil
