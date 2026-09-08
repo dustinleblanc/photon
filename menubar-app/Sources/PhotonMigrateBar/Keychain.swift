@@ -53,6 +53,5 @@ enum Keychain {
 
 enum KeychainAccount {
     static let username = "proton-username"
-    static let password = "proton-password"
     static let session = "proton-session"
 }
