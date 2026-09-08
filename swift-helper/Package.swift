@@ -10,6 +10,7 @@ let package = Package(
         .executableTarget(
             name: "photos-helper",
             path: "Sources/photos-helper",
+            exclude: ["Info.plist"],
             linkerSettings: [
                 // PhotoKit requires an embedded Info.plist with
                 // NSPhotoLibraryUsageDescription, even for a plain CLI binary.
