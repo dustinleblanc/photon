@@ -10,6 +10,7 @@ let package = Package(
         .executableTarget(
             name: "PhotonMigrateBar",
             path: "Sources/PhotonMigrateBar",
+            exclude: ["Info.plist"],
             linkerSettings: [
                 // LSUIElement=YES suppresses the Dock icon/app switcher entry,
                 // making this a menu-bar-only app -- same Info.plist embedding
