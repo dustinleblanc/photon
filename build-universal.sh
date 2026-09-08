@@ -40,14 +40,15 @@ lipo -create \
   "$IN/x86_64/PhotonMigrateBar-x86_64" \
   -output "$OUT/PhotonMigrate.app/Contents/MacOS/PhotonMigrate"
 
-cp "$OUT/photon-migrate" "$OUT/PhotonMigrate.app/Contents/Resources/photon-migrate"
-cp "$OUT/photos-helper"  "$OUT/PhotonMigrate.app/Contents/Resources/photos-helper"
-
-# lipo -create writes modes 0644, which would ship an .app whose every
-# executable is unexecutable. Restore +x on all three merged binaries.
+# lipo -create writes modes 0644, which would otherwise ship an .app whose
+# executables are unexecutable. Restore +x BEFORE copying, so the bundle
+# copies inherit it — and the two copies land in the bundle with +x too.
 chmod +x "$OUT/photon-migrate" \
          "$OUT/photos-helper" \
          "$OUT/PhotonMigrate.app/Contents/MacOS/PhotonMigrate"
+
+cp "$OUT/photon-migrate" "$OUT/PhotonMigrate.app/Contents/Resources/photon-migrate"
+cp "$OUT/photos-helper"  "$OUT/PhotonMigrate.app/Contents/Resources/photos-helper"
 
 echo "==> Writing Info.plist"
 cat > "$OUT/PhotonMigrate.app/Contents/Info.plist" <<PLIST
@@ -80,6 +81,17 @@ PLIST
 echo "==> Ad-hoc signing"
 codesign --force --deep --sign - "$OUT/PhotonMigrate.app"
 codesign --verify --deep --strict "$OUT/PhotonMigrate.app"
+
+echo "==> Verifying executables are executable"
+for bin in \
+  "$OUT/photon-migrate" \
+  "$OUT/photos-helper" \
+  "$OUT/PhotonMigrate.app/Contents/MacOS/PhotonMigrate" \
+  "$OUT/PhotonMigrate.app/Contents/Resources/photon-migrate" \
+  "$OUT/PhotonMigrate.app/Contents/Resources/photos-helper"
+do
+  test -x "$bin" || { echo "ERROR: not executable: $bin" >&2; exit 1; }
+done
 
 echo "==> Archiving"
 tar -C "$OUT" -czf "$OUT/PhotonMigrate.app.tar.gz" PhotonMigrate.app
