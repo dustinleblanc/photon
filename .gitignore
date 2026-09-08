@@ -1,0 +1,20 @@
+# Build output
+build/
+
+# Go binary
+go-uploader/photon-migrate
+
+# Swift build artifacts
+.build/
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
