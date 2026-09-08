@@ -20,11 +20,26 @@ enum PhotonRunner {
         if let bundled = Bundle.main.url(forResource: "photon-migrate", withExtension: nil) {
             return bundled
         }
-        return developmentCheckout.appendingPathComponent("go-uploader/photon-migrate")
+        // Walk upward from this source file's location to find the repo root
+        // (has go.mod), then look for the Go binary in the expected build location.
+        let sourceDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        var dir = sourceDir
+        for _ in 0..<10 {
+            let goMod = dir.appendingPathComponent("go.mod")
+            if FileManager.default.fileExists(atPath: goMod.path) {
+                let candidate = dir.appendingPathComponent("go-uploader/photon-migrate")
+                if FileManager.default.fileExists(atPath: candidate.path) {
+                    return candidate
+                }
+                break
+            }
+            let parent = dir.deletingLastPathComponent()
+            if parent.path == dir.path { break }
+            dir = parent
+        }
+        // Last resort: hope it's on PATH
+        return URL(fileURLWithPath: "photon-migrate")
     }()
-
-    private static let developmentCheckout = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("projects/photon-migrate")
 
     struct Result {
         let stdout: String

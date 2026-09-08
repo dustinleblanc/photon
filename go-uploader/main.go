@@ -74,20 +74,22 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: photon-migrate <plan|status|login|reconcile|upload|upload-batch> [--json]")
-	fmt.Fprintln(os.Stderr, "  plan         reads JSONL from stdin (output of `photos-helper list`) and populates the status DB")
-	fmt.Fprintln(os.Stderr, "  status       prints how many assets are pending/uploaded/skipped/failed")
-	fmt.Fprintln(os.Stderr, "  login        does a fresh SRP+2FA login and prints the resulting session as JSON on stdout")
-	fmt.Fprintln(os.Stderr, "               (requires PROTON_USERNAME, PROTON_PASSWORD, PROTON_2FA env vars)")
-	fmt.Fprintln(os.Stderr, "  reconcile    matches pending local assets against what's already on Proton Photos by capture time")
-	fmt.Fprintln(os.Stderr, "               (requires PROTON_SESSION_JSON, or the login env vars above for a fresh login)")
-	fmt.Fprintln(os.Stderr, "               emits the (possibly rotated) session as 'SESSION_JSON:{...}' on stderr when done")
-	fmt.Fprintln(os.Stderr, "  upload       uploads a single file (read from stdin) into the Photos share -- see --filename/--modtime")
-	fmt.Fprintln(os.Stderr, "  upload-batch walks every pending asset in the status DB, exporting via photos-helper and uploading each")
-	fmt.Fprintln(os.Stderr, "               skips anything Proton's own dedup check reports as already there")
-	fmt.Fprintln(os.Stderr, "               (requires PROTON_UPLOAD_SESSION_JSON, or PROTON_USERNAME/PASSWORD/2FA for a fresh login;")
-	fmt.Fprintln(os.Stderr, "               optional --limit N; --session-out <path> writes the (possibly rotated) session there,")
-	fmt.Fprintln(os.Stderr, "               0600, for a caller to read back -- omit it and nothing is written")
+	fmt.Fprintln(os.Stderr, "usage: photon-migrate <command> [options]")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "commands:")
+	fmt.Fprintln(os.Stderr, "  plan                reads JSONL from stdin (output of `photos-helper list`) and populates the status DB")
+	fmt.Fprintln(os.Stderr, "  status              prints how many assets are pending/uploaded/skipped/failed")
+	fmt.Fprintln(os.Stderr, "  upload-login        signs in and stores the session (requires PROTON_USERNAME/PASSWORD/2FA env vars)")
+	fmt.Fprintln(os.Stderr, "  upload              uploads a single file from stdin -- see --filename/--modtime")
+	fmt.Fprintln(os.Stderr, "  upload-batch        uploads every pending asset via photos-helper")
+	fmt.Fprintln(os.Stderr, "  backfill-thumbnails re-uploads photos missing their thumbnail previews")
+	fmt.Fprintln(os.Stderr, "  reconcile           marks pending assets as uploaded if they already exist on Proton")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "options:")
+	fmt.Fprintln(os.Stderr, "  --json              output counts as JSON")
+	fmt.Fprintln(os.Stderr, "  --limit N           process at most N assets (upload-batch, backfill-thumbnails)")
+	fmt.Fprintln(os.Stderr, "  --session-out PATH  write the (possibly rotated) session to PATH, 0600")
+	fmt.Fprintln(os.Stderr, "  --exit-with-parent  stop if the parent process exits (used by the GUI)")
 	os.Exit(1)
 }
 
@@ -98,6 +100,36 @@ func hasFlag(name string) bool {
 		}
 	}
 	return false
+}
+
+// parseFlagInt looks for --name <value> in os.Args and returns the parsed
+// integer. Returns (value, true) if found, or (defaultVal, false) if absent.
+// Calls fatal() if the flag is present but the value is not a valid integer.
+func parseFlagInt(name string, defaultVal int) (int, bool) {
+	for i := 2; i < len(os.Args); i++ {
+		if os.Args[i] == name && i+1 < len(os.Args) {
+			val, err := strconv.Atoi(os.Args[i+1])
+			if err != nil {
+				fatal(fmt.Errorf("invalid value for %s: %q is not a number", name, os.Args[i+1]))
+			}
+			return val, true
+		}
+	}
+	return defaultVal, false
+}
+
+// parseFlagInt64 is like parseFlagInt but returns int64 (used for --modtime).
+func parseFlagInt64(name string, defaultVal int64) (int64, bool) {
+	for i := 2; i < len(os.Args); i++ {
+		if os.Args[i] == name && i+1 < len(os.Args) {
+			val, err := strconv.ParseInt(os.Args[i+1], 10, 64)
+			if err != nil {
+				fatal(fmt.Errorf("invalid value for %s: %q is not a number", name, os.Args[i+1]))
+			}
+			return val, true
+		}
+	}
+	return defaultVal, false
 }
 
 // loginOutcome is the single JSON object cmdLogin always prints to stdout,
@@ -119,6 +151,22 @@ func printJSON(v any) {
 	fmt.Println(string(data))
 }
 
+// handleHVError checks whether err is an HVRequiredError (captcha needed)
+// and, if so, prints the loginOutcome and returns true. Returns false for
+// all other errors (which the caller should handle normally).
+func handleHVError(err error) bool {
+	var hvErr *upload.HVRequiredError
+	if errors.As(err, &hvErr) {
+		printJSON(loginOutcome{
+			Status:    "hv_required",
+			HVToken:   hvErr.Challenge.Token,
+			HVMethods: hvErr.Challenge.Methods,
+		})
+		return true
+	}
+	return false
+}
+
 // uploadSessionName is the key the upload-stack session is stored under in
 // the status DB's sessions table; uploadLockName guards against two batches
 // running at once.
@@ -132,7 +180,8 @@ const (
 //  1. PHOTOS_HELPER_PATH, for pointing at a local rebuild
 //  2. alongside this binary -- how it ships, with both in the app bundle's
 //     Contents/Resources, so neither needs to know an absolute path
-//  3. the development checkout, so a source tree still works
+//  3. relative to the repo root (found by walking up to a go.mod sentinel),
+//     so any checkout location works
 func helperBinaryPath() string {
 	if override := os.Getenv("PHOTOS_HELPER_PATH"); override != "" {
 		return override
@@ -148,8 +197,30 @@ func helperBinaryPath() string {
 		}
 	}
 
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "projects", "photon-migrate", "swift-helper", ".build", "debug", "photos-helper")
+	// Walk upward from the executable to find the repo root (has go.mod),
+	// then look for the helper in the expected build location.
+	if exe, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		dir := filepath.Dir(exe)
+		for i := 0; i < 10; i++ {
+			if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+				candidate := filepath.Join(dir, "..", "swift-helper", ".build", "debug", "photos-helper")
+				if _, err := os.Stat(candidate); err == nil {
+					return candidate
+				}
+				break
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
+	}
+
+	return "photos-helper" // last resort: hope it's on PATH
 }
 
 // watchParent stops the batch if whoever launched us goes away. macOS does
@@ -259,13 +330,7 @@ func cmdUploadLogin() {
 
 	_, holder, err := resolveUploadSession(ctx)
 	if err != nil {
-		var hvErr *upload.HVRequiredError
-		if errors.As(err, &hvErr) {
-			printJSON(loginOutcome{
-				Status:    "hv_required",
-				HVToken:   hvErr.Challenge.Token,
-				HVMethods: hvErr.Challenge.Methods,
-			})
+		if handleHVError(err) {
 			return
 		}
 		fatal(err)
@@ -286,21 +351,14 @@ func cmdUploadLogin() {
 //	photos-helper export "<localIdentifier>" | photon-migrate upload --filename "IMG_1234.heic" --modtime 1717000000
 func cmdUpload() {
 	var filename string
-	var modTimeUnix int64
 	for i := 2; i < len(os.Args); i++ {
-		switch os.Args[i] {
-		case "--filename":
+		if os.Args[i] == "--filename" && i+1 < len(os.Args) {
+			filename = os.Args[i+1]
 			i++
-			if i < len(os.Args) {
-				filename = os.Args[i]
-			}
-		case "--modtime":
-			i++
-			if i < len(os.Args) {
-				modTimeUnix, _ = strconv.ParseInt(os.Args[i], 10, 64)
-			}
 		}
 	}
+	modTimeUnix, _ := parseFlagInt64("--modtime", 0)
+
 	if filename == "" {
 		fmt.Fprintln(os.Stderr, "usage: photon-migrate upload --filename <name> --modtime <unix-seconds> (reads file content from stdin)")
 		os.Exit(1)
@@ -316,13 +374,7 @@ func cmdUpload() {
 
 	drive, holder, err := resolveUploadSession(ctx)
 	if err != nil {
-		var hvErr *upload.HVRequiredError
-		if errors.As(err, &hvErr) {
-			printJSON(loginOutcome{
-				Status:    "hv_required",
-				HVToken:   hvErr.Challenge.Token,
-				HVMethods: hvErr.Challenge.Methods,
-			})
+		if handleHVError(err) {
 			return
 		}
 		fatal(err)
@@ -348,16 +400,7 @@ func cmdUpload() {
 // Optional: --limit N (default: everything pending), PHOTOS_HELPER_PATH to
 // override the photos-helper binary location.
 func cmdUploadBatch() {
-	limit := 0
-	for i := 2; i < len(os.Args); i++ {
-		if os.Args[i] == "--limit" && i+1 < len(os.Args) {
-			i++
-			limit, _ = strconv.Atoi(os.Args[i])
-		}
-	}
-	if limit <= 0 {
-		limit = 1_000_000
-	}
+	limit, _ := parseFlagInt("--limit", 1_000_000)
 
 	// Stop cleanly on Ctrl-C, or on the SIGTERM the GUI sends when you press
 	// Stop: the loop finishes the file in flight and exits between items,
@@ -382,13 +425,7 @@ func cmdUploadBatch() {
 
 	drive, holder, err := resolveUploadSession(ctx)
 	if err != nil {
-		var hvErr *upload.HVRequiredError
-		if errors.As(err, &hvErr) {
-			printJSON(loginOutcome{
-				Status:    "hv_required",
-				HVToken:   hvErr.Challenge.Token,
-				HVMethods: hvErr.Challenge.Methods,
-			})
+		if handleHVError(err) {
 			return
 		}
 		fatal(err)
@@ -442,16 +479,7 @@ func filenameForVersion(original string, version asset.Version) string {
 // and no duplicate appears in the timeline. The dedup check is deliberately
 // skipped here -- these are known duplicates, that's the point.
 func cmdBackfillThumbnails() {
-	limit := 0
-	for i := 2; i < len(os.Args); i++ {
-		if os.Args[i] == "--limit" && i+1 < len(os.Args) {
-			i++
-			limit, _ = strconv.Atoi(os.Args[i])
-		}
-	}
-	if limit <= 0 {
-		limit = 1_000_000
-	}
+	limit, _ := parseFlagInt("--limit", 1_000_000)
 
 	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
@@ -475,13 +503,7 @@ func cmdBackfillThumbnails() {
 
 	drive, holder, err := resolveUploadSession(ctx)
 	if err != nil {
-		var hvErr *upload.HVRequiredError
-		if errors.As(err, &hvErr) {
-			printJSON(loginOutcome{
-				Status:    "hv_required",
-				HVToken:   hvErr.Challenge.Token,
-				HVMethods: hvErr.Challenge.Methods,
-			})
+		if handleHVError(err) {
 			return
 		}
 		fatal(err)
@@ -692,13 +714,7 @@ func cmdReconcile() {
 
 	drive, holder, err := resolveUploadSession(ctx)
 	if err != nil {
-		var hvErr *upload.HVRequiredError
-		if errors.As(err, &hvErr) {
-			printJSON(loginOutcome{
-				Status:    "hv_required",
-				HVToken:   hvErr.Challenge.Token,
-				HVMethods: hvErr.Challenge.Methods,
-			})
+		if handleHVError(err) {
 			return
 		}
 		fatal(err)

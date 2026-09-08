@@ -152,7 +152,7 @@ struct ThumbnailSpec {
 /// Proton rejects thumbnails over the limit, and a photo whose thumbnail is
 /// rejected still uploads -- it just shows up with no preview.
 func encodeJPEG(_ image: CGImage, maxBytes: Int) -> Data? {
-    for quality in stride(from: 0.8, through: 0.3, by: -0.1) {
+    for quality in stride(from: 0.8, through: 0.1, by: -0.1) {
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else {
             return nil
