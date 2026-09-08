@@ -1,0 +1,111 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            runner: macos-15-intel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go-uploader/go.mod
+          cache-dependency-path: go-uploader/go.sum
+
+      - name: Build components (${{ matrix.arch }})
+        run: ./build-arch.sh ${{ matrix.arch }} build
+
+      - name: Verify binary architecture
+        run: |
+          for f in build/*-${{ matrix.arch }}; do
+            file "$f"
+          done
+
+      - name: Upload ${{ matrix.arch }} build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.arch }}
+          path: build/
+          retention-days: 1
+
+  release:
+    name: Assemble universal release
+    needs: build
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download arm64 build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-arm64
+          path: build/arm64
+
+      - name: Download x86_64 build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-x86_64
+          path: build/x86_64
+
+      - name: Derive version from tag
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            echo "PHOTON_MIGRATE_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            echo "PHOTON_MIGRATE_VERSION=0.1.0-dev" >> "$GITHUB_ENV"
+          fi
+
+      - name: Merge into universal .app
+        run: ./build-universal.sh .
+
+      - name: Compute checksums
+        run: |
+          cd build/dist
+          shasum -a 256 PhotonMigrate.app.tar.gz photon-migrate photos-helper > SHA256SUMS.txt
+
+      - name: Stage release assets
+        run: |
+          mkdir -p release
+          cp build/dist/PhotonMigrate.app.tar.gz release/
+          cp build/dist/photon-migrate release/
+          cp build/dist/photos-helper release/
+          cp build/dist/SHA256SUMS.txt release/
+
+      - name: Upload assembled distributables (workflow artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: photon-migrate-dist
+          path: release/
+          retention-days: 14
+
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v3
+        with:
+          working_directory: release
+          files: |
+            PhotonMigrate.app.tar.gz
+            photon-migrate
+            photos-helper
+            SHA256SUMS.txt
+          generate_release_notes: true
+          fail_on_unmatched_files: true

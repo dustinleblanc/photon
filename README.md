@@ -49,6 +49,40 @@ cd menubar-app && swift run
 ./build-app.sh
 ```
 
+## Releases
+
+Tag a release and push — GitHub Actions compiles all three components on both
+arm64 and x86_64 runners, merges them into a universal `.app`, and attaches the
+distributables to the release:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Release assets:
+
+| Asset | Purpose |
+|---|---|
+| `PhotonMigrate.app.tar.gz` | Universal (arm64 + x86_64) menu bar app, ad-hoc signed + `SHA256SUMS.txt` |
+| `photon-migrate` | Universal standalone CLI uploader binary |
+| `photos-helper` | Universal standalone Photos library reader binary |
+
+The workflow can also be run manually (Actions > release > Run workflow) to
+produce the same artifacts as downloadable workflow artifacts, without
+creating a GitHub release.
+
+Open the DMG-free tarball:
+
+```bash
+tar -xzf PhotonMigrate.app.tar.gz
+open PhotonMigrate.app
+```
+
+Gatekeeper will flag the ad-hoc-signed app on machines other than the one that
+built it; right-click → Open to bypass, or sign with a Developer ID for
+silent launching.
+
 ## CLI usage
 
 The Go binary can be used directly without the GUI — useful for debugging
@@ -121,9 +155,15 @@ Credentials live only in macOS Keychain — never in the database.
 
 ### Vendored dependencies
 
-`go-uploader/third_party/` contains **modified forks** of `go-proton-api` and
-`Proton-API-Bridge`. A `go get -u` will silently discard all patches and break
-the build. See `HANDOFF.md` for the full list of modifications.
+Two `go-proton-api` / `Proton-API-Bridge` dependencies are **modified forks**,
+pulled via `replace` directives in `go-uploader/go.mod`:
+
+- `github.com/dustinleblanc/go-proton-api` (tag `v0.4.1-photon.2`)
+- `github.com/dustinleblanc/Proton-API-Bridge` (tag `v1.0.0-photon.1`)
+
+A `go get -u` may silently discard the patches or fail on the `replace`
+directives. See `go-uploader/PATCHES.md` for the full list of modifications
+and how to rebase them onto upstream.
 
 ### App version string
 

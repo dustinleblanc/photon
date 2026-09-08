@@ -1,5 +1,7 @@
 # Build output
 build/
+release/
+*.tar.gz
 
 # Go binary
 go-uploader/photon-migrate
