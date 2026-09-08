@@ -43,6 +43,12 @@ lipo -create \
 cp "$OUT/photon-migrate" "$OUT/PhotonMigrate.app/Contents/Resources/photon-migrate"
 cp "$OUT/photos-helper"  "$OUT/PhotonMigrate.app/Contents/Resources/photos-helper"
 
+# lipo -create writes modes 0644, which would ship an .app whose every
+# executable is unexecutable. Restore +x on all three merged binaries.
+chmod +x "$OUT/photon-migrate" \
+         "$OUT/photos-helper" \
+         "$OUT/PhotonMigrate.app/Contents/MacOS/PhotonMigrate"
+
 echo "==> Writing Info.plist"
 cat > "$OUT/PhotonMigrate.app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
