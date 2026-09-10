@@ -59,6 +59,13 @@ struct ContentView: View {
                         }
                     }
                     .disabled(state.isBusy || state.isUploading)
+
+                    Button {
+                        Task { await state.retryFailed() }
+                    } label: {
+                        Text("Retry Failed")
+                    }
+                    .disabled(state.isBusy || state.isUploading || state.counts.failed == 0)
                 }
 
                 HStack {
