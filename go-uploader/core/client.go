@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"io"
 
 	papi "github.com/ProtonMail/go-proton-api"
@@ -71,10 +72,29 @@ func (c *Client) OpenOriginal(ctx context.Context, linkID string) (io.ReadCloser
 	return rc, size, nil
 }
 
-// FetchPreview returns a rendered JPEG preview for a photo. Not implemented in
-// M0: the bridge has no thumbnail-download path yet, so callers must fall back
-// to OpenOriginal.
+// FetchPreview returns a rendered JPEG preview for a photo, decrypted
+// client-side from the encrypted thumbnail Proton stores. size selects the
+// thumbnail tier: <=512px uses the "default" (512px) preview, larger uses the
+// "photo" (1920px) HD preview. Falls back to a lower tier if the requested one
+// is missing.
 func (c *Client) FetchPreview(ctx context.Context, linkID string, size int) ([]byte, error) {
+	preferred := papi.ThumbnailTypePhoto
+	if size <= 512 {
+		preferred = papi.ThumbnailTypeDefault
+	}
+
+	// Try the preferred tier first, then the other, so a photo missing its HD
+	// preview still gets a thumbnail rather than a full-original download.
+	for _, tier := range []int{preferred, papi.ThumbnailTypeDefault + papi.ThumbnailTypePhoto - preferred} {
+		data, err := c.drive.DownloadThumbnail(ctx, linkID, tier)
+		if err == nil {
+			return data, nil
+		}
+		if errors.Is(err, upload.ErrNoThumbnail) {
+			continue
+		}
+		return nil, err
+	}
 	return nil, ErrPreviewUnavailable
 }
 

@@ -17,6 +17,10 @@ import (
 // this module don't need to import the bridge's common package directly.
 type HVRequiredError = common.HVRequiredError
 
+// ErrNoThumbnail re-exports the bridge's "no preview of this type" signal,
+// which FetchPreview uses to fall back across thumbnail tiers.
+var ErrNoThumbnail = bridge.ErrNoThumbnail
+
 // Drive re-exports *bridge.ProtonDrive so callers don't need to import the
 // bridge package directly just to hold a reference to it between calls.
 type Drive = bridge.ProtonDrive
