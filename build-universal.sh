@@ -49,6 +49,7 @@ chmod +x "$OUT/photon-migrate" \
 
 cp "$OUT/photon-migrate" "$OUT/PhotonMigrate.app/Contents/Resources/photon-migrate"
 cp "$OUT/photos-helper"  "$OUT/PhotonMigrate.app/Contents/Resources/photos-helper"
+cp "$ROOT/assets/AppIcon.icns" "$OUT/PhotonMigrate.app/Contents/Resources/AppIcon.icns"
 
 echo "==> Writing Info.plist"
 cat > "$OUT/PhotonMigrate.app/Contents/Info.plist" <<PLIST

@@ -11,20 +11,24 @@ struct PhotonMigrateBarApp: App {
                 .environmentObject(state)
                 .onAppear { appDelegate.state = state }
         } label: {
-            // Reads the live upload progress while a batch is running --
-            // the label re-renders on @Published changes even while the
-            // popover is closed, which the pending count alone did not do
-            // (it was only refreshed when the popover opened).
-            Text(menuBarTitle)
+            // A donut progress ring around a camera glyph. The icon re-renders
+            // on @Published changes (counts / uploadProgress / isUploading)
+            // even while the popover is closed, so progress stays live.
+            Image(nsImage: MenuBarIcon.progress(fraction: menuBarFraction))
+                .accessibilityLabel("Photon Migrate")
         }
         .menuBarExtraStyle(.window)
     }
 
-    private var menuBarTitle: String {
-        guard state.hasSession else { return "…" }
+    private var menuBarFraction: Double {
+        // While a batch runs, show its live fraction; otherwise fall back to
+        // overall library completion (uploaded / total so far).
         if state.isUploading, let progress = state.uploadProgress {
-            return progress.menuBarLabel
+            return progress.fraction
         }
-        return "\(state.counts.pending)"
+        let c = state.counts
+        let total = c.pending + c.uploaded + c.skippedDuplicate + c.failed
+        guard total > 0 else { return 0 }
+        return Double(c.uploaded) / Double(total)
     }
 }
