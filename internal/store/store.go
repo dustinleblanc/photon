@@ -10,7 +10,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"photon-migrate/internal/asset"
+	"photon/internal/asset"
 )
 
 type Status string

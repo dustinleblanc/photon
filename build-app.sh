@@ -14,7 +14,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP="${1:-$ROOT/build/PhotonMigrate.app}"
 
 echo "==> Building components"
-(cd "$ROOT/go-uploader" && go build -o "$ROOT/build/photon-migrate" .)
+(cd "$ROOT" && go build -o "$ROOT/build/photon" .)
 (cd "$ROOT/swift-helper" && swift build -c release)
 (cd "$ROOT/menubar-app" && swift build -c release)
 
@@ -23,7 +23,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp "$ROOT/menubar-app/.build/release/PhotonMigrateBar" "$APP/Contents/MacOS/PhotonMigrate"
-cp "$ROOT/build/photon-migrate" "$APP/Contents/Resources/photon-migrate"
+cp "$ROOT/build/photon" "$APP/Contents/Resources/photon"
 cp "$ROOT/swift-helper/.build/release/photos-helper" "$APP/Contents/Resources/photos-helper"
 cp "$ROOT/assets/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 

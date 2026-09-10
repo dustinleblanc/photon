@@ -25,8 +25,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go-uploader/go.mod
-          cache-dependency-path: go-uploader/go.sum
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
 
       - name: Build components (${{ matrix.arch }})
         run: ./build-arch.sh ${{ matrix.arch }} build
@@ -80,13 +80,13 @@ jobs:
       - name: Compute checksums
         run: |
           cd build/dist
-          shasum -a 256 PhotonMigrate.app.tar.gz photon-migrate photos-helper > SHA256SUMS.txt
+          shasum -a 256 PhotonMigrate.app.tar.gz photon photos-helper > SHA256SUMS.txt
 
       - name: Stage release assets
         run: |
           mkdir -p release
           cp build/dist/PhotonMigrate.app.tar.gz release/
-          cp build/dist/photon-migrate release/
+          cp build/dist/photon release/
           cp build/dist/photos-helper release/
           cp build/dist/SHA256SUMS.txt release/
 
@@ -104,7 +104,7 @@ jobs:
           working_directory: release
           files: |
             PhotonMigrate.app.tar.gz
-            photon-migrate
+            photon
             photos-helper
             SHA256SUMS.txt
           generate_release_notes: true

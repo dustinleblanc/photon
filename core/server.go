@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"photon-migrate/internal/upload"
+	"photon/proton"
 )
 
 // Server exposes the loopback HTTP API the Flutter UI consumes. It is bound to
@@ -17,22 +17,22 @@ import (
 type Server struct {
 	mu      sync.Mutex
 	client  *Client
-	session upload.Session
+	session proton.Session
 
 	// onSession, if set, is invoked after login/resume so the caller can
 	// persist the (possibly rotated) session.
-	onSession func(upload.Session) error
+	onSession func(proton.Session) error
 }
 
 // NewServer returns an unauthenticated server. Seed an existing session with
 // SetSession, or let the UI call POST /api/v1/auth/login.
-func NewServer(onSession func(upload.Session) error) *Server {
+func NewServer(onSession func(proton.Session) error) *Server {
 	return &Server{onSession: onSession}
 }
 
 // SetSession seeds an already-resumed client + session (e.g. from a session
 // the CLI read off disk at startup).
-func (s *Server) SetSession(client *Client, session upload.Session) {
+func (s *Server) SetSession(client *Client, session proton.Session) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.client = client
@@ -98,7 +98,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 
 	client, session, err := Login(r.Context(), req.Username, req.Password, req.Totp, req.HVToken, req.HVMethod)
 	if err != nil {
-		var hv *upload.HVRequiredError
+		var hv *proton.HVRequiredError
 		if errors.As(err, &hv) {
 			writeJSON(w, http.StatusOK, loginResponse{
 				Status:    "hv_required",
@@ -123,12 +123,12 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 func (s *Server) logout(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
 	s.client = nil
-	s.session = upload.Session{}
+	s.session = proton.Session{}
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (s *Server) persistSession(session upload.Session) {
+func (s *Server) persistSession(session proton.Session) {
 	if s.onSession != nil {
 		_ = s.onSession(session)
 	}

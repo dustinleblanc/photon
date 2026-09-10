@@ -1,6 +1,6 @@
 import Foundation
 
-/// Persists every `photon-migrate` subprocess invocation to a plain text
+/// Persists every `photon` subprocess invocation to a plain text
 /// file under ~/Library/Logs -- the standard macOS location for app logs
 /// (readable in Console.app, or with any text editor/`tail`). This exists
 /// because the menu bar popover's output isn't copyable, and because a
@@ -9,13 +9,13 @@ import Foundation
 enum AppLog {
     static let directory = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Logs/PhotonMigrate")
-    static let fileURL = directory.appendingPathComponent("photon-migrate.log")
+    static let fileURL = directory.appendingPathComponent("photon.log")
 
     static func append(command: [String], result: PhotonRunner.Result) {
         let formatter = ISO8601DateFormatter()
         let entry = """
         ---- \(formatter.string(from: Date())) ----
-        $ photon-migrate \(command.joined(separator: " "))
+        $ photon \(command.joined(separator: " "))
         exit: \(result.exitCode)
         stdout:
         \(redact(result.stdout))

@@ -20,13 +20,13 @@ import (
 	"syscall"
 	"time"
 
-	"photon-migrate/internal/upload"
+	"photon/proton"
 
 	papi "github.com/ProtonMail/go-proton-api"
 
-	"photon-migrate/core"
-	"photon-migrate/internal/asset"
-	"photon-migrate/internal/store"
+	"photon/core"
+	"photon/internal/asset"
+	"photon/internal/store"
 )
 
 // dbPath is fixed to a location under the user's Application Support
@@ -79,7 +79,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: photon-migrate <command> [options]")
+	fmt.Fprintln(os.Stderr, "usage: photon <command> [options]")
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "commands:")
 	fmt.Fprintln(os.Stderr, "  plan                reads JSONL from stdin (output of `photos-helper list`) and populates the status DB")
@@ -158,7 +158,7 @@ func parseFlagInt64(name string, defaultVal int64) (int64, bool) {
 // scraping error text.
 type loginOutcome struct {
 	Status    string          `json:"status"` // "ok" | "hv_required"
-	Session   *upload.Session `json:"session,omitempty"`
+	Session   *proton.Session `json:"session,omitempty"`
 	HVToken   string          `json:"hvToken,omitempty"`
 	HVMethods []string        `json:"hvMethods,omitempty"`
 }
@@ -175,7 +175,7 @@ func printJSON(v any) {
 // and, if so, prints the loginOutcome and returns true. Returns false for
 // all other errors (which the caller should handle normally).
 func handleHVError(err error) bool {
-	var hvErr *upload.HVRequiredError
+	var hvErr *proton.HVRequiredError
 	if errors.As(err, &hvErr) {
 		printJSON(loginOutcome{
 			Status:    "hv_required",
@@ -274,13 +274,13 @@ func watchParent(stop func()) {
 // A stored session that no longer works (revoked, or a refresh token too
 // old) falls through to (3) rather than failing, so the GUI never gets
 // stuck needing a manual reset.
-func resolveUploadSession(ctx context.Context) (*upload.Drive, *upload.SessionHolder, error) {
+func resolveUploadSession(ctx context.Context) (*proton.Drive, *proton.SessionHolder, error) {
 	if raw := os.Getenv("PROTON_UPLOAD_SESSION_JSON"); raw != "" {
-		var saved upload.Session
+		var saved proton.Session
 		if err := json.Unmarshal([]byte(raw), &saved); err != nil {
 			return nil, nil, fmt.Errorf("parse PROTON_UPLOAD_SESSION_JSON: %w", err)
 		}
-		return upload.Resume(ctx, saved)
+		return proton.Resume(ctx, saved)
 	}
 
 	username := os.Getenv("PROTON_USERNAME")
@@ -292,7 +292,7 @@ func resolveUploadSession(ctx context.Context) (*upload.Drive, *upload.SessionHo
 		return nil, nil, fmt.Errorf("no PROTON_UPLOAD_SESSION_JSON, and PROTON_USERNAME/PROTON_PASSWORD are not set")
 	}
 
-	return upload.Login(ctx, username, password, totp, hvToken, hvMethod)
+	return proton.Login(ctx, username, password, totp, hvToken, hvMethod)
 }
 
 // sessionOutPath returns where to write the (possibly rotated) session, if
@@ -317,7 +317,7 @@ func sessionOutPath() string {
 // writeUploadSession persists the current session to --session-out, if one
 // was given. Errors are reported but not fatal: failing to hand back a
 // rotated token shouldn't undo a batch that otherwise completed.
-func writeUploadSession(holder *upload.SessionHolder) {
+func writeUploadSession(holder *proton.SessionHolder) {
 	if holder == nil {
 		return
 	}
@@ -368,7 +368,7 @@ func cmdUploadLogin() {
 //
 // Usage:
 //
-//	photos-helper export "<localIdentifier>" | photon-migrate upload --filename "IMG_1234.heic" --modtime 1717000000
+//	photos-helper export "<localIdentifier>" | photon upload --filename "IMG_1234.heic" --modtime 1717000000
 func cmdUpload() {
 	var filename string
 	for i := 2; i < len(os.Args); i++ {
@@ -380,7 +380,7 @@ func cmdUpload() {
 	modTimeUnix, _ := parseFlagInt64("--modtime", 0)
 
 	if filename == "" {
-		fmt.Fprintln(os.Stderr, "usage: photon-migrate upload --filename <name> --modtime <unix-seconds> (reads file content from stdin)")
+		fmt.Fprintln(os.Stderr, "usage: photon upload --filename <name> --modtime <unix-seconds> (reads file content from stdin)")
 		os.Exit(1)
 	}
 
@@ -402,7 +402,7 @@ func cmdUpload() {
 	defer writeUploadSession(holder)
 
 	modTime := time.Unix(modTimeUnix, 0)
-	linkID, err := upload.UploadOne(ctx, drive, filename, modTime, os.Stdin, nil)
+	linkID, err := proton.UploadOne(ctx, drive, filename, modTime, os.Stdin, nil)
 	if err != nil {
 		fatal(err)
 	}
@@ -565,8 +565,8 @@ func cmdBackfillThumbnails() {
 //
 // Returns (filenameToUse, existingLinkID, error). A non-empty existingLinkID
 // means it really is already uploaded and should be skipped.
-func resolveNameCollision(ctx context.Context, drive *upload.Drive, helperPath string, item store.PendingItem, filename string) (string, string, error) {
-	matches, err := upload.FindDuplicatesByName(ctx, drive, filename)
+func resolveNameCollision(ctx context.Context, drive *proton.Drive, helperPath string, item store.PendingItem, filename string) (string, string, error) {
+	matches, err := proton.FindDuplicatesByName(ctx, drive, filename)
 	if err != nil {
 		return filename, "", err
 	}
@@ -580,7 +580,7 @@ func resolveNameCollision(ctx context.Context, drive *upload.Drive, helperPath s
 	if err != nil {
 		return filename, "", fmt.Errorf("hashing %s to check for a real duplicate: %w", filename, err)
 	}
-	contentHash, err := upload.PhotoContentHash(ctx, drive, sha1Hex)
+	contentHash, err := proton.PhotoContentHash(ctx, drive, sha1Hex)
 	if err != nil {
 		return filename, "", err
 	}
@@ -592,7 +592,7 @@ func resolveNameCollision(ctx context.Context, drive *upload.Drive, helperPath s
 	}
 
 	// Same name, different photo: find a free name rather than dropping it.
-	candidate, err := upload.FindAvailableName(ctx, drive, filename, nil)
+	candidate, err := proton.FindAvailableName(ctx, drive, filename, nil)
 	if err != nil {
 		return filename, "", err
 	}
@@ -633,12 +633,12 @@ func hashAssetContent(ctx context.Context, helperPath string, item store.Pending
 }
 
 // renderThumbnails asks the helper for the two preview sizes Proton's own
-// clients upload. A thumbnail that fails to render is skipped rather than
+// clients proton. A thumbnail that fails to render is skipped rather than
 // failing the whole asset: a photo with one preview (or none) is still
 // better than not uploading it at all. Videos have no still to render, so
 // this is best-effort by design.
-func renderThumbnails(ctx context.Context, helperPath, localIdentifier string, version asset.Version) []upload.Thumbnail {
-	var thumbnails []upload.Thumbnail
+func renderThumbnails(ctx context.Context, helperPath, localIdentifier string, version asset.Version) []proton.Thumbnail {
+	var thumbnails []proton.Thumbnail
 
 	for _, thumbType := range []int{papi.ThumbnailTypeDefault, papi.ThumbnailTypePhoto} {
 		args := []string{"thumbnail", localIdentifier, "--type", strconv.Itoa(thumbType)}
@@ -663,7 +663,7 @@ func renderThumbnails(ctx context.Context, helperPath, localIdentifier string, v
 			continue
 		}
 
-		thumbnails = append(thumbnails, upload.Thumbnail{
+		thumbnails = append(thumbnails, proton.Thumbnail{
 			Type: thumbType,
 			Data: append([]byte(nil), stdout.Bytes()...),
 		})
@@ -678,7 +678,7 @@ func renderThumbnails(ctx context.Context, helperPath, localIdentifier string, v
 // Returns the new link ID and how many thumbnails were actually attached --
 // rendering is best-effort, and the caller must not record a photo as
 // having previews when none made it.
-func uploadOneFromHelper(ctx context.Context, drive *upload.Drive, helperPath, localIdentifier string, version asset.Version, filename string, modTime time.Time) (string, int, error) {
+func uploadOneFromHelper(ctx context.Context, drive *proton.Drive, helperPath, localIdentifier string, version asset.Version, filename string, modTime time.Time) (string, int, error) {
 	thumbnails := renderThumbnails(ctx, helperPath, localIdentifier, version)
 
 	args := []string{"export", localIdentifier}
@@ -708,7 +708,7 @@ func uploadOneFromHelper(ctx context.Context, drive *upload.Drive, helperPath, l
 		}
 	}, fmt.Sprintf("export of %s", filename))
 
-	linkID, uploadErr := upload.UploadOne(ctx, drive, filename, modTime, reader, thumbnails)
+	linkID, uploadErr := proton.UploadOne(ctx, drive, filename, modTime, reader, thumbnails)
 	stopWatchdog()
 
 	if reader.bytesRead() == 0 {
@@ -741,9 +741,9 @@ func cmdReconcile() {
 	}
 	defer writeUploadSession(holder)
 
-	fmt.Printf("found Photos volume: %s\n", upload.PhotosVolumeID(drive))
+	fmt.Printf("found Photos volume: %s\n", proton.PhotosVolumeID(drive))
 
-	remoteByTime, total, err := upload.FetchAllPhotoCaptureTimes(ctx, drive)
+	remoteByTime, total, err := proton.FetchAllPhotoCaptureTimes(ctx, drive)
 	if err != nil {
 		fatal(err)
 	}
@@ -867,7 +867,7 @@ func cmdServe() {
 	addr := parseFlagString("--addr", "127.0.0.1:8787")
 	sessionPath := sessionOutPath()
 
-	srv := core.NewServer(func(s upload.Session) error {
+	srv := core.NewServer(func(s proton.Session) error {
 		if sessionPath == "" {
 			return nil
 		}
@@ -881,7 +881,7 @@ func cmdServe() {
 	// Resume a session we already have, so a relaunch doesn't require a fresh
 	// login. Failures here are non-fatal: the UI can just sign in again.
 	if raw := os.Getenv("PROTON_UPLOAD_SESSION_JSON"); raw != "" {
-		var saved upload.Session
+		var saved proton.Session
 		if err := json.Unmarshal([]byte(raw), &saved); err == nil {
 			if client, err := core.Resume(context.Background(), saved); err == nil {
 				srv.SetSession(client, saved)

@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"photon-migrate/internal/store"
-	"photon-migrate/internal/upload"
+	"photon/internal/store"
+	"photon/proton"
 )
 
 // uploadWorkers is how many assets are processed at once. Each one costs
@@ -53,7 +53,7 @@ func newNameReserver() *nameReserver {
 // reserve claims preferred if it is free, otherwise finds and claims the
 // next available variant. Held under one lock so that choosing and claiming
 // cannot interleave between workers.
-func (r *nameReserver) reserve(ctx context.Context, drive *upload.Drive, preferred string) (string, error) {
+func (r *nameReserver) reserve(ctx context.Context, drive *proton.Drive, preferred string) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -62,7 +62,7 @@ func (r *nameReserver) reserve(ctx context.Context, drive *upload.Drive, preferr
 		return preferred, nil
 	}
 
-	alternative, err := upload.FindAvailableName(ctx, drive, preferred, func(candidate string) bool {
+	alternative, err := proton.FindAvailableName(ctx, drive, preferred, func(candidate string) bool {
 		return r.taken[strings.ToLower(candidate)]
 	})
 	if err != nil {
@@ -123,7 +123,7 @@ type queueTally struct {
 // runUploadQueue processes items concurrently, recording each result as it
 // completes. Shared by the batch and backfill passes, which previously were
 // two near-identical loops.
-func runUploadQueue(ctx context.Context, drive *upload.Drive, s *store.Store, cfg queueConfig) *queueTally {
+func runUploadQueue(ctx context.Context, drive *proton.Drive, s *store.Store, cfg queueConfig) *queueTally {
 	var (
 		tally     = &queueTally{}
 		completed atomic.Int64
@@ -189,7 +189,7 @@ func runUploadQueue(ctx context.Context, drive *upload.Drive, s *store.Store, cf
 
 func processQueueItem(
 	ctx context.Context,
-	drive *upload.Drive,
+	drive *proton.Drive,
 	s *store.Store,
 	cfg queueConfig,
 	reserver *nameReserver,

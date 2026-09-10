@@ -4,8 +4,8 @@ A cross-platform client for a **Proton Photos** library: browse on demand, organ
 hide, export/convert, and (later) detect people — without downloading the whole
 library to every device.
 
-Working name: **Photon Library**. The existing `photon-migrate` CLI stays as the
-migration tool; this plan is for the browsing/management app.
+Working name: **Photon Library**. The `photon` CLI keeps the migration commands;
+this plan is for the browsing/management app.
 
 ---
 
@@ -284,7 +284,7 @@ later best-effort goal.
 
 ## 9. Phasing (one client at a time)
 
-- **M0 — Core extraction.** Refactor `photon-migrate` internals into a reusable `core`
+- **M0 — Core extraction.** Refactor `photon` internals into a reusable `core`
   module; define ports; add `photon-serve` HTTP API. No UI.
 - **M1 — Desktop browse (Flutter).** Grid, lightbox, thumbnail cache, on-demand
   originals. macOS first, then Linux/Windows. Core as sidecar process.
@@ -303,18 +303,17 @@ Each milestone is independently useful and testable.
 ## 10. Repo / module layout
 
 ```
-photon-migrate/                 # existing migration CLI (keep)
-  core/                         # shared Go module (domain; no UI)
-    proton/  catalog/  cache/  export/  people/  sync/
-    ports.go                    # the interfaces above
-  cmd/
-    photon-migrate/             # existing CLI
-    photon-serve/               # HTTP server for the UI (loopback seam)
-  app/                          # Flutter app (all five platforms)
+photon/                          # repo root = Go module "photon"
+  main.go                        # single CLI (migrate subcommands + serve)
+  core/                          # domain: ports.go, client.go, server.go
+    proton/  catalog/  cache/  export/  people/  sync/   # (later)
+  proton/                        # low-level Proton client (session, drive, thumbnails)
+  internal/                      # migration-specific: store/, asset/
+  app/                           # Flutter app (all five platforms)
     lib/  android/  ios/  macos/  linux/  windows/
   adapters/
-    codec/{apple,ffmpeg}        # ImageCodec
-    face/{vision,mlkit,onnx}    # FaceEngine
+    codec/{apple,ffmpeg}         # ImageCodec
+    face/{vision,mlkit,onnx}     # FaceEngine
 ```
 
 Secure storage and biometrics live in the Flutter app via plugins, so they have no

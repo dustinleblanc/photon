@@ -81,6 +81,6 @@ git rebase upstream/dev_2025_01_27
 git tag -a v0.4.1-photon.3 -m "Rebase on upstream"
 git push origin dev_2025_01_27 --tags
 
-# 3. Update go.mod in photon-migrate
+# 3. Update go.mod in photon
 # Change the replace directive to point at the new tag
 ```

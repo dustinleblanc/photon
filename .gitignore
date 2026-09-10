@@ -4,7 +4,7 @@ release/
 *.tar.gz
 
 # Go binary
-go-uploader/photon-migrate
+photon
 
 # Swift build artifacts
 .build/

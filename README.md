@@ -1,4 +1,4 @@
-# photon-migrate
+# photon
 
 Migrate your iCloud or Google Photos library into **Proton Photos** — the
 actual Photos timeline, with thumbnails, indistinguishable from something
@@ -36,8 +36,8 @@ open build/PhotonMigrate.app
 ## Building from source
 
 ```bash
-# Go uploader + tests
-cd go-uploader && go build -o photon-migrate . && go vet ./... && go test -race ./...
+# Go CLI + tests
+go build -o photon . && go vet ./... && go test -race ./...
 
 # Swift PhotoKit helper
 cd swift-helper && swift build
@@ -65,7 +65,7 @@ Release assets:
 | Asset | Purpose |
 |---|---|
 | `PhotonMigrate.app.tar.gz` | Universal (arm64 + x86_64) menu bar app, ad-hoc signed + `SHA256SUMS.txt` |
-| `photon-migrate` | Universal standalone CLI uploader binary |
+| `photon` | Universal standalone CLI binary |
 | `photos-helper` | Universal standalone Photos library reader binary |
 
 The workflow can also be run manually (Actions > release > Run workflow) to
@@ -89,23 +89,21 @@ The Go binary can be used directly without the GUI — useful for debugging
 and headless/automated workflows.
 
 ```bash
-cd go-uploader
-
 # Sign in (stores session in the DB)
 export PROTON_USERNAME=... PROTON_PASSWORD=... PROTON_2FA=...
-./photon-migrate upload-login
+./photon upload-login
 
 # Check status
-./photon-migrate status --json
+./photon status --json
 
 # Upload a small test batch
-./photon-migrate upload-batch --limit 10
+./photon upload-batch --limit 10
 
 # Re-upload missing thumbnails
-./photon-migrate backfill-thumbnails --limit 10
+./photon backfill-thumbnails --limit 10
 
 # Match pending assets against what's already on Proton
-./photon-migrate reconcile
+./photon reconcile
 ```
 
 ### Environment variables
@@ -137,9 +135,9 @@ export PROTON_USERNAME=... PROTON_PASSWORD=... PROTON_2FA=...
 Three components, one SQLite database as shared state:
 
 ```
-menubar-app/    SwiftUI menu bar app — the GUI, owns credentials/Keychain
-swift-helper/   CLI tool using PhotoKit — reads the local Photos library
-go-uploader/    CLI tool — Proton auth, encryption, upload, all state
+menubar-app/     SwiftUI menu bar app — the GUI, owns credentials/Keychain
+swift-helper/    CLI tool using PhotoKit — reads the local Photos library
+core/ proton/    Go — Proton auth, encryption, upload, browse server
 ```
 
 They communicate via subprocess + JSON on stdout, one line of progress per
@@ -156,19 +154,19 @@ Credentials live only in macOS Keychain — never in the database.
 ### Vendored dependencies
 
 Two `go-proton-api` / `Proton-API-Bridge` dependencies are **modified forks**,
-pulled via `replace` directives in `go-uploader/go.mod`:
+pulled via `replace` directives in `go.mod`:
 
-- `github.com/dustinleblanc/go-proton-api` (tag `v0.4.1-photon.2`)
-- `github.com/dustinleblanc/Proton-API-Bridge` (tag `v1.0.0-photon.1`)
+- `github.com/dustinleblanc/go-proton-api` (tag `v0.4.1-photon.3`)
+- `github.com/dustinleblanc/Proton-API-Bridge` (tag `v1.0.0-photon.2`)
 
 A `go get -u` may silently discard the patches or fail on the `replace`
-directives. See `go-uploader/PATCHES.md` for the full list of modifications
+directives. See `PATCHES.md` for the full list of modifications
 and how to rebase them onto upstream.
 
 ### App version string
 
 Proton gates some endpoints on a minimum client version. This is currently
-set to `macos-drive@3.0.2` in `internal/upload/upload.go`. If uploads start
+set to `macos-drive@3.0.2` in `proton/upload.go`. If uploads start
 failing with "outdated app" errors, check Proton's current release notes for
 the real version number.
 

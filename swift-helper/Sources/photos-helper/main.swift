@@ -5,7 +5,7 @@ import ImageIO
 import UniformTypeIdentifiers
 import AVFoundation
 
-// photos-helper: a thin PhotoKit bridge for the photon-migrate project.
+// photos-helper: a thin PhotoKit bridge for the photon project.
 //
 // Subcommands:
 //   list                                    -> JSONL of every PHAsset's metadata to stdout
