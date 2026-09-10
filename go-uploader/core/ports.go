@@ -17,10 +17,9 @@ import (
 	"io"
 )
 
-// ErrPreviewUnavailable is returned by ProtonClient.FetchPreview when a preview
-// cannot be produced yet. For M0 previews are not implemented (the bridge can
-// upload thumbnails but has no download path); the grid is expected to fall back
-// to on-demand originals or a placeholder until thumbnail fetch lands.
+// ErrPreviewUnavailable is returned by ProtonClient.FetchPreview when a photo
+// has no preview in any tier. The grid is expected to fall back to on-demand
+// originals or a placeholder.
 var ErrPreviewUnavailable = errors.New("preview unavailable")
 
 // Photo is one item in the Proton Photos timeline. It maps 1:1 onto the

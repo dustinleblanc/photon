@@ -34,10 +34,10 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
-github.com/dustinleblanc/Proton-API-Bridge v1.0.0-photon.1 h1:rPnmU2CRIHOA7dwT13ML8KO1dFHeRWjGDraQx1+E5bQ=
-github.com/dustinleblanc/Proton-API-Bridge v1.0.0-photon.1/go.mod h1:HL1I0BOsDOVznUsDeMGSDeg+AW6jI6A0Z1DewjRmUZc=
-github.com/dustinleblanc/go-proton-api v0.4.1-photon.2 h1:uzA22Ru0xBNvF2bYzl5TRg823sPkSx6zOxMKD9oxp+s=
-github.com/dustinleblanc/go-proton-api v0.4.1-photon.2/go.mod h1:EzsT6/y9ee1xS5O/LS/V6OoSPxp5n38eb/2Y7W3mfbE=
+github.com/dustinleblanc/Proton-API-Bridge v1.0.0-photon.2 h1:XXaeIlzEt8p9phy1M/pP8Yx0WTzvXgIg5z8Az1kDQ8w=
+github.com/dustinleblanc/Proton-API-Bridge v1.0.0-photon.2/go.mod h1:HL1I0BOsDOVznUsDeMGSDeg+AW6jI6A0Z1DewjRmUZc=
+github.com/dustinleblanc/go-proton-api v0.4.1-photon.3 h1:Fm1Cf+xOss6VysRhLy843U/e+rAGQX3uH9CKHmDFIlg=
+github.com/dustinleblanc/go-proton-api v0.4.1-photon.3/go.mod h1:EzsT6/y9ee1xS5O/LS/V6OoSPxp5n38eb/2Y7W3mfbE=
 github.com/emersion/go-message v0.18.2 h1:rl55SQdjd9oJcIoQNhubD2Acs1E6IzlZISRTK7x/Lpg=
 github.com/emersion/go-message v0.18.2/go.mod h1:XpJyL70LwRvq2a8rVbHXikPgKj8+aI0kGdHlg16ibYA=
 github.com/emersion/go-vcard v0.0.0-20241024213814-c9703dde27ff h1:4N8wnS3f1hNHSmFD5zgFkWCyA4L1kCDkImPAtK7D6tg=
