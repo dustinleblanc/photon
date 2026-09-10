@@ -145,6 +145,26 @@ final class AppState: ObservableObject {
         uploadProcess = nil
     }
 
+    /// Resets failed assets back to pending so "Upload Pending" picks them up
+    /// again. The Go side has a `retry-failed` command; we run it the same way
+    /// as `status` -- a short, session-free invocation that just touches the
+    /// DB -- then refresh counts so the dropdown reflects the change.
+    func retryFailed() async {
+        guard hasSession else {
+            lastError = "Not signed in yet -- open Settings and sign in first."
+            return
+        }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            try await PhotonRunner.retryFailed()
+            lastError = nil
+            await refreshStatus()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
     func reconcile() async {
         guard hasSession else {
             lastError = "Not signed in yet -- open Settings and sign in first."

@@ -238,6 +238,13 @@ enum PhotonRunner {
         return counts
     }
 
+    /// Resets failed assets to pending so the next "Upload Pending" retries
+    /// them. `retry-failed` only touches the status DB, so it needs no session.
+    static func retryFailed() async throws {
+        let result = try await run(["retry-failed", "--json"])
+        guard result.exitCode == 0 else { throw RunnerError.nonZeroExit(result) }
+    }
+
     /// Signs in and returns the session for the caller to store. There is
     /// one session for everything now -- status, reconcile and uploads all
     /// share it.
