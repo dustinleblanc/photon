@@ -5,13 +5,13 @@
 # Run after the two build legs have produced the per-arch components. Expects
 # a directory layout like:
 #
-#   build/arm64/{photon-migrate-arm64,photos-helper-arm64,PhotonMigrateBar-arm64}
-#   build/x86_64/{photon-migrate-x86_64,photos-helper-x86_64,PhotonMigrateBar-x86_64}
+#   build/arm64/{photon-arm64,photos-helper-arm64,PhotonMigrateBar-arm64}
+#   build/x86_64/{photon-x86_64,photos-helper-x86_64,PhotonMigrateBar-x86_64}
 #
 # Outputs:
 #   build/dist/PhotonMigrate.app        universal (fat) app bundle, ad-hoc signed
 #   build/dist/PhotonMigrate.app.tar.gz tarball of the above
-#   build/dist/photon-migrate           universal standalone CLI binary
+#   build/dist/photon           universal standalone CLI binary
 #   build/dist/photos-helper            universal standalone helper binary
 #
 # Usage: build-universal.sh [artifact-root]
@@ -26,9 +26,9 @@ mkdir -p "$OUT/PhotonMigrate.app/Contents/MacOS" "$OUT/PhotonMigrate.app/Content
 
 echo "==> Creating universal binaries with lipo"
 lipo -create \
-  "$IN/arm64/photon-migrate-arm64" \
-  "$IN/x86_64/photon-migrate-x86_64" \
-  -output "$OUT/photon-migrate"
+  "$IN/arm64/photon-arm64" \
+  "$IN/x86_64/photon-x86_64" \
+  -output "$OUT/photon"
 
 lipo -create \
   "$IN/arm64/photos-helper-arm64" \
@@ -43,11 +43,11 @@ lipo -create \
 # lipo -create writes modes 0644, which would otherwise ship an .app whose
 # executables are unexecutable. Restore +x BEFORE copying, so the bundle
 # copies inherit it — and the two copies land in the bundle with +x too.
-chmod +x "$OUT/photon-migrate" \
+chmod +x "$OUT/photon" \
          "$OUT/photos-helper" \
          "$OUT/PhotonMigrate.app/Contents/MacOS/PhotonMigrate"
 
-cp "$OUT/photon-migrate" "$OUT/PhotonMigrate.app/Contents/Resources/photon-migrate"
+cp "$OUT/photon" "$OUT/PhotonMigrate.app/Contents/Resources/photon"
 cp "$OUT/photos-helper"  "$OUT/PhotonMigrate.app/Contents/Resources/photos-helper"
 cp "$ROOT/assets/AppIcon.icns" "$OUT/PhotonMigrate.app/Contents/Resources/AppIcon.icns"
 
@@ -58,7 +58,7 @@ cat > "$OUT/PhotonMigrate.app/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.dustinleblanc.photon-migrate</string>
+    <string>com.dustinleblanc.photon</string>
     <key>CFBundleName</key>
     <string>Photon Migrate</string>
     <key>CFBundleExecutable</key>
@@ -85,10 +85,10 @@ codesign --verify --deep --strict "$OUT/PhotonMigrate.app"
 
 echo "==> Verifying executables are executable"
 for bin in \
-  "$OUT/photon-migrate" \
+  "$OUT/photon" \
   "$OUT/photos-helper" \
   "$OUT/PhotonMigrate.app/Contents/MacOS/PhotonMigrate" \
-  "$OUT/PhotonMigrate.app/Contents/Resources/photon-migrate" \
+  "$OUT/PhotonMigrate.app/Contents/Resources/photon" \
   "$OUT/PhotonMigrate.app/Contents/Resources/photos-helper"
 do
   test -x "$bin" || { echo "ERROR: not executable: $bin" >&2; exit 1; }

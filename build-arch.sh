@@ -23,13 +23,13 @@ esac
 mkdir -p "$ROOT/$OUT"
 
 echo "==> Building Go uploader ($ARCH)"
-(cd "$ROOT/go-uploader" && GOOS=darwin GOARCH="$GOARCH" go build -o "$ROOT/$OUT/photon-migrate-$ARCH" .)
+(cd "$ROOT" && GOOS=darwin GOARCH="$GOARCH" go build -o "$ROOT/$OUT/photon-$ARCH" .)
 
 echo "==> Building photos-helper ($ARCH)"
 (cd "$ROOT/swift-helper" && swift build -c release)
 cp "$ROOT/swift-helper/.build/release/photos-helper" "$ROOT/$OUT/photos-helper-$ARCH"
 
-echo "==> Building photon-migrate bar ($ARCH)"
+echo "==> Building photon bar ($ARCH)"
 (cd "$ROOT/menubar-app" && swift build -c release)
 cp "$ROOT/menubar-app/.build/release/PhotonMigrateBar" "$ROOT/$OUT/PhotonMigrateBar-$ARCH"
 

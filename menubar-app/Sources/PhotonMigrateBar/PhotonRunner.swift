@@ -1,10 +1,10 @@
 import Foundation
 
-// Runs the `photon-migrate` Go binary as a subprocess and parses its output.
+// Runs the `photon` Go binary as a subprocess and parses its output.
 // All the real logic (Proton auth, the status DB, reconciliation) lives in
 // that binary -- this is intentionally a thin wrapper.
 enum PhotonRunner {
-    /// Where the `photon-migrate` binary lives, in preference order:
+    /// Where the `photon` binary lives, in preference order:
     ///
     ///  1. `PHOTON_MIGRATE_BIN`, for pointing a build at a local rebuild
     ///  2. the app bundle's Resources, which is how it ships
@@ -17,7 +17,7 @@ enum PhotonRunner {
         if let override = ProcessInfo.processInfo.environment["PHOTON_MIGRATE_BIN"], !override.isEmpty {
             return URL(fileURLWithPath: override)
         }
-        if let bundled = Bundle.main.url(forResource: "photon-migrate", withExtension: nil) {
+        if let bundled = Bundle.main.url(forResource: "photon", withExtension: nil) {
             return bundled
         }
         // Walk upward from this source file's location to find the repo root
@@ -27,7 +27,7 @@ enum PhotonRunner {
         for _ in 0..<10 {
             let goMod = dir.appendingPathComponent("go.mod")
             if FileManager.default.fileExists(atPath: goMod.path) {
-                let candidate = dir.appendingPathComponent("go-uploader/photon-migrate")
+                let candidate = dir.appendingPathComponent("photon")
                 if FileManager.default.fileExists(atPath: candidate.path) {
                     return candidate
                 }
@@ -38,7 +38,7 @@ enum PhotonRunner {
             dir = parent
         }
         // Last resort: hope it's on PATH
-        return URL(fileURLWithPath: "photon-migrate")
+        return URL(fileURLWithPath: "photon")
     }()
 
     struct Result {
@@ -54,7 +54,7 @@ enum PhotonRunner {
         var errorDescription: String? {
             switch self {
             case .nonZeroExit(let result):
-                return "photon-migrate exited \(result.exitCode): \(result.stderr)"
+                return "photon exited \(result.exitCode): \(result.stderr)"
             case .decodeFailure(let raw):
                 return "failed to parse output: \(raw)"
             }
@@ -174,7 +174,7 @@ enum PhotonRunner {
     /// exposure at all -- this is opt-in for callers that want it back.
     private static func makeSessionOutPath() -> String {
         FileManager.default.temporaryDirectory
-            .appendingPathComponent("photon-migrate-session-\(UUID().uuidString).json")
+            .appendingPathComponent("photon-session-\(UUID().uuidString).json")
             .path
     }
 
@@ -288,7 +288,7 @@ enum PhotonRunner {
         defer { consumeSessionOutFile(sessionPath) }
 
         var progress = UploadProgress()
-        AppLog.append("$ photon-migrate \(args.joined(separator: " "))")
+        AppLog.append("$ photon \(args.joined(separator: " "))")
 
         let exitCode = try await runStreaming(args, onStart: onStart) { line, isStderr in
             AppLog.append(isStderr ? "stderr: \(line)" : line)

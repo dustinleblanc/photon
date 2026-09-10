@@ -7,32 +7,32 @@ import (
 
 	papi "github.com/ProtonMail/go-proton-api"
 
-	"photon-migrate/internal/upload"
+	"photon/proton"
 )
 
 // Client is the concrete ProtonClient over the reverse-engineered bridge. It
 // holds a live session (with token rotation) plus the scoped Photos-share
 // drive. Construct via Login or Resume.
 type Client struct {
-	drive  *upload.Drive
-	holder *upload.SessionHolder
+	drive  *proton.Drive
+	holder *proton.SessionHolder
 }
 
 // Login performs a fresh SRP login (optionally completing a human-verification
 // challenge) and returns the client plus the session to persist for future
 // Resume calls.
-func Login(ctx context.Context, username, password, totp, hvToken, hvMethod string) (*Client, upload.Session, error) {
-	drive, holder, err := upload.Login(ctx, username, password, totp, hvToken, hvMethod)
+func Login(ctx context.Context, username, password, totp, hvToken, hvMethod string) (*Client, proton.Session, error) {
+	drive, holder, err := proton.Login(ctx, username, password, totp, hvToken, hvMethod)
 	if err != nil {
-		return nil, upload.Session{}, err
+		return nil, proton.Session{}, err
 	}
 	return &Client{drive: drive, holder: holder}, holder.Get(), nil
 }
 
 // Resume re-establishes a client from a previously persisted session, avoiding
 // a password/2FA/captcha round-trip. Tokens refresh automatically.
-func Resume(ctx context.Context, saved upload.Session) (*Client, error) {
-	drive, holder, err := upload.Resume(ctx, saved)
+func Resume(ctx context.Context, saved proton.Session) (*Client, error) {
+	drive, holder, err := proton.Resume(ctx, saved)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +41,7 @@ func Resume(ctx context.Context, saved upload.Session) (*Client, error) {
 
 // Session returns the current (possibly rotated) session, so the caller can
 // persist it after use.
-func (c *Client) Session() upload.Session {
+func (c *Client) Session() proton.Session {
 	return c.holder.Get()
 }
 
@@ -90,7 +90,7 @@ func (c *Client) FetchPreview(ctx context.Context, linkID string, size int) ([]b
 		if err == nil {
 			return data, nil
 		}
-		if errors.Is(err, upload.ErrNoThumbnail) {
+		if errors.Is(err, proton.ErrNoThumbnail) {
 			continue
 		}
 		return nil, err

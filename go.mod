@@ -1,4 +1,4 @@
-module photon-migrate
+module photon
 
 go 1.27.1
 
