@@ -25,6 +25,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$ROOT/menubar-app/.build/release/PhotonMigrateBar" "$APP/Contents/MacOS/PhotonMigrate"
 cp "$ROOT/build/photon-migrate" "$APP/Contents/Resources/photon-migrate"
 cp "$ROOT/swift-helper/.build/release/photos-helper" "$APP/Contents/Resources/photos-helper"
+cp "$ROOT/assets/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
 # NSPhotoLibraryUsageDescription must be on the bundle the user sees in the
 # permission prompt, not just on the helper that makes the request.
@@ -37,6 +38,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <string>com.dustinleblanc.photon-migrate</string>
     <key>CFBundleName</key>
     <string>Photon Migrate</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleExecutable</key>
     <string>PhotonMigrate</string>
     <key>CFBundlePackageType</key>
