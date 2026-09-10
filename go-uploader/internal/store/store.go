@@ -277,6 +277,25 @@ WHERE local_identifier = ? AND version = ?`,
 	return err
 }
 
+// RetryFailed moves failed assets back to pending so upload-batch picks them
+// up again. If errorSubstring is non-empty, only failures whose error contains
+// it are reset -- useful to retry a transient class (e.g. a missing helper
+// binary) while leaving genuinely broken assets failed. Returns how many rows
+// were reset.
+func (s *Store) RetryFailed(errorSubstring string) (int64, error) {
+	args := []any{StatusPending, StatusFailed}
+	where := "status = ?"
+	if errorSubstring != "" {
+		where += " AND error LIKE ?"
+		args = append(args, "%"+errorSubstring+"%")
+	}
+	res, err := s.db.Exec(`UPDATE assets SET status = ?, error = NULL, last_attempt_at = NULL WHERE `+where, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 type Counts struct {
 	Pending, Uploaded, SkippedDuplicate, Failed int
 }
