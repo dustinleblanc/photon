@@ -24,6 +24,7 @@ import (
 
 	papi "github.com/ProtonMail/go-proton-api"
 
+	"photon-migrate/core"
 	"photon-migrate/internal/asset"
 	"photon-migrate/internal/store"
 )
@@ -68,6 +69,10 @@ func main() {
 		cmdBackfillThumbnails()
 	case "reconcile":
 		cmdReconcile()
+	case "retry-failed":
+		cmdRetryFailed()
+	case "serve":
+		cmdServe()
 	default:
 		usage()
 	}
@@ -84,12 +89,16 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  upload-batch        uploads every pending asset via photos-helper")
 	fmt.Fprintln(os.Stderr, "  backfill-thumbnails re-uploads photos missing their thumbnail previews")
 	fmt.Fprintln(os.Stderr, "  reconcile           marks pending assets as uploaded if they already exist on Proton")
+	fmt.Fprintln(os.Stderr, "  retry-failed        resets failed assets to pending (optional: --error-substring X)")
+	fmt.Fprintln(os.Stderr, "  serve               runs the loopback HTTP API for the Photon Library UI")
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "options:")
 	fmt.Fprintln(os.Stderr, "  --json              output counts as JSON")
 	fmt.Fprintln(os.Stderr, "  --limit N           process at most N assets (upload-batch, backfill-thumbnails)")
+	fmt.Fprintln(os.Stderr, "  --error-substring X only reset failures whose error contains X (retry-failed)")
 	fmt.Fprintln(os.Stderr, "  --session-out PATH  write the (possibly rotated) session to PATH, 0600")
 	fmt.Fprintln(os.Stderr, "  --exit-with-parent  stop if the parent process exits (used by the GUI)")
+	fmt.Fprintln(os.Stderr, "  --addr HOST:PORT    serve bind address (serve; default 127.0.0.1:8787)")
 	os.Exit(1)
 }
 
@@ -116,6 +125,17 @@ func parseFlagInt(name string, defaultVal int) (int, bool) {
 		}
 	}
 	return defaultVal, false
+}
+
+// parseFlagString looks for --name <value> in os.Args and returns the value,
+// or defaultVal if the flag is absent.
+func parseFlagString(name string, defaultVal string) string {
+	for i := 2; i < len(os.Args); i++ {
+		if os.Args[i] == name && i+1 < len(os.Args) {
+			return os.Args[i+1]
+		}
+	}
+	return defaultVal
 }
 
 // parseFlagInt64 is like parseFlagInt but returns int64 (used for --modtime).
@@ -816,6 +836,63 @@ func cmdStatus() {
 	defer s.Close()
 
 	printCounts(s, hasFlag("--json"))
+}
+
+func cmdRetryFailed() {
+	match := parseFlagString("--error-substring", "")
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		fatal(err)
+	}
+	defer s.Close()
+
+	n, err := s.RetryFailed(match)
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Printf("reset %d failed assets to pending", n)
+	if match != "" {
+		fmt.Printf(" (error contains %q)", match)
+	}
+	fmt.Println()
+	printCounts(s, hasFlag("--json"))
+}
+
+// cmdServe runs the loopback HTTP API for the Photon Library UI. It is bound
+// to 127.0.0.1 only. A session already on disk (via --session-out) or in
+// PROTON_UPLOAD_SESSION_JSON is resumed automatically; otherwise the UI logs
+// in through POST /api/v1/auth/login.
+func cmdServe() {
+	addr := parseFlagString("--addr", "127.0.0.1:8787")
+	sessionPath := sessionOutPath()
+
+	srv := core.NewServer(func(s upload.Session) error {
+		if sessionPath == "" {
+			return nil
+		}
+		data, err := json.Marshal(s)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(sessionPath, data, 0o600)
+	})
+
+	// Resume a session we already have, so a relaunch doesn't require a fresh
+	// login. Failures here are non-fatal: the UI can just sign in again.
+	if raw := os.Getenv("PROTON_UPLOAD_SESSION_JSON"); raw != "" {
+		var saved upload.Session
+		if err := json.Unmarshal([]byte(raw), &saved); err == nil {
+			if client, err := core.Resume(context.Background(), saved); err == nil {
+				srv.SetSession(client, saved)
+			}
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "photon-serve listening on http://%s\n", addr)
+	if err := srv.Serve(addr); err != nil {
+		fatal(err)
+	}
 }
 
 func printCounts(s *store.Store, asJSON bool) {
