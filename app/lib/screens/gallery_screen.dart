@@ -1,4 +1,4 @@
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 
 import '../state/app_state.dart';
 import 'lightbox_screen.dart';
@@ -35,16 +35,18 @@ class _GalleryScreenState extends State<GalleryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return CupertinoPageScaffold(
-      navigationBar: CupertinoNavigationBar(
-        middle: const Text('Photon Library'),
-        trailing: CupertinoButton(
-          padding: EdgeInsets.zero,
-          onPressed: () => widget.state.logout(),
-          child: const Icon(CupertinoIcons.escape),
-        ),
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Photon Library'),
+        actions: [
+          IconButton(
+            tooltip: 'Sign out',
+            icon: const Icon(Icons.logout),
+            onPressed: () => widget.state.logout(),
+          ),
+        ],
       ),
-      child: ListenableBuilder(
+      body: ListenableBuilder(
         listenable: widget.state,
         builder: (context, _) {
           if (widget.state.error != null) {
@@ -54,7 +56,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
             );
           }
           if (widget.state.photos.isEmpty && widget.state.loading) {
-            return const Center(child: CupertinoActivityIndicator());
+            return const Center(child: CircularProgressIndicator());
           }
           if (widget.state.photos.isEmpty) {
             return const Center(child: Text('No photos yet.'));
@@ -67,14 +69,17 @@ class _GalleryScreenState extends State<GalleryScreen> {
               mainAxisSpacing: 2,
               crossAxisSpacing: 2,
             ),
-            itemCount:
-                widget.state.photos.length + (widget.state.hasMore ? 1 : 0),
+            itemCount: widget.state.photos.length + (widget.state.hasMore ? 1 : 0),
             itemBuilder: (context, index) {
               if (index >= widget.state.photos.length) {
                 return const Center(
                   child: Padding(
                     padding: EdgeInsets.all(16),
-                    child: CupertinoActivityIndicator(radius: 12),
+                    child: SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
                   ),
                 );
               }
@@ -93,7 +98,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
 
   void _openLightbox(int index) {
     Navigator.of(context).push(
-      CupertinoPageRoute(
+      MaterialPageRoute(
         builder: (_) => LightboxScreen(
           state: widget.state,
           initialIndex: index,
@@ -116,7 +121,7 @@ class _PhotoTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return InkWell(
       onTap: onTap,
       child: FutureBuilder(
         future: state.preview(linkId),
@@ -129,16 +134,20 @@ class _PhotoTile extends StatelessWidget {
               gaplessPlayback: true,
             );
           }
-          final theme = CupertinoTheme.of(context);
-          return ColoredBox(
-            color: theme.scaffoldBackgroundColor.withValues(alpha: 0.04),
+          final theme = Theme.of(context);
+          return Container(
+            color: theme.colorScheme.surfaceContainerHighest,
             child: Center(
               child: snapshot.hasError
                   ? Icon(
-                      CupertinoIcons.photo_on_rectangle,
-                      color: theme.primaryColor.withValues(alpha: 0.6),
+                      Icons.broken_image_outlined,
+                      color: theme.colorScheme.outline,
                     )
-                  : const CupertinoActivityIndicator(radius: 10),
+                  : const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
             ),
           );
         },
@@ -163,9 +172,10 @@ class _ErrorView extends StatelessWidget {
           children: [
             Text(message, textAlign: TextAlign.center),
             const SizedBox(height: 12),
-            CupertinoButton.filled(
+            OutlinedButton.icon(
               onPressed: onRetry,
-              child: const Text('Retry'),
+              icon: const Icon(Icons.refresh),
+              label: const Text('Retry'),
             ),
           ],
         ),

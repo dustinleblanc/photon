@@ -1,4 +1,4 @@
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 
 import '../state/app_state.dart';
 
@@ -45,9 +45,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = CupertinoTheme.of(context);
-    return CupertinoPageScaffold(
-      child: Center(
+    final theme = Theme.of(context);
+    return Scaffold(
+      body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(32),
           child: ConstrainedBox(
@@ -57,18 +57,15 @@ class _LoginScreenState extends State<LoginScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Icon(
-                  CupertinoIcons.photo,
+                  Icons.photo_library_outlined,
                   size: 56,
-                  color: theme.primaryColor,
+                  color: theme.colorScheme.primary,
                 ),
                 const SizedBox(height: 12),
                 Text(
                   'Photon Library',
                   textAlign: TextAlign.center,
-                  style: theme.textTheme.textStyle.copyWith(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: theme.textTheme.headlineSmall,
                 ),
                 const SizedBox(height: 24),
                 if (widget.state.error != null) ...[
@@ -79,8 +76,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   Text(
                     'Almost there',
                     textAlign: TextAlign.center,
-                    style: theme.textTheme.textStyle.copyWith(
-                      fontSize: 15,
+                    style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -88,11 +84,8 @@ class _LoginScreenState extends State<LoginScreen> {
                   Text(
                     _username.text.trim(),
                     textAlign: TextAlign.center,
-                    style: theme.textTheme.textStyle.copyWith(
-                      fontSize: 13,
-                      color: theme.textTheme.textStyle.color?.withValues(
-                        alpha: 0.6,
-                      ),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.outline,
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -101,29 +94,26 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        CupertinoTextField(
+                        TextField(
                           controller: _username,
-                          placeholder: 'Proton username',
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 10,
+                          decoration: const InputDecoration(
+                            labelText: 'Proton username',
+                            border: OutlineInputBorder(),
                           ),
-                          autocorrect: false,
-                          enableSuggestions: false,
                           autofillHints: const [AutofillHints.username],
                           textInputAction: TextInputAction.next,
+                          autocorrect: false,
                           enabled: !_busy,
                         ),
-                        const SizedBox(height: 10),
-                        CupertinoTextField(
+                        const SizedBox(height: 12),
+                        TextField(
                           controller: _password,
-                          placeholder: 'Password',
+                          decoration: const InputDecoration(
+                            labelText: 'Password',
+                            border: OutlineInputBorder(),
+                          ),
                           obscureText: true,
                           autofillHints: const [AutofillHints.password],
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 10,
-                          ),
                           textInputAction: TextInputAction.go,
                           onSubmitted: (_) => _submit(),
                           enabled: !_busy,
@@ -131,26 +121,28 @@ class _LoginScreenState extends State<LoginScreen> {
                       ],
                     ),
                   ),
-                const SizedBox(height: 10),
                 if (widget.state.totpRequired)
-                  CupertinoTextField(
+                  TextField(
                     controller: _totp,
                     focusNode: _totpFocus,
-                    placeholder: '6-digit code from your authenticator app',
+                    decoration: const InputDecoration(
+                      labelText: '6-digit code from your authenticator app',
+                      border: OutlineInputBorder(),
+                    ),
                     keyboardType: TextInputType.number,
                     autofillHints: const [AutofillHints.oneTimeCode],
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
                     onSubmitted: (_) => _submit(),
                     enabled: !_busy,
                   ),
                 const SizedBox(height: 20),
-                CupertinoButton.filled(
+                FilledButton(
                   onPressed: _busy ? null : _submit,
                   child: _busy
-                      ? const CupertinoActivityIndicator()
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
                       : Text(widget.state.totpRequired ? 'Verify' : 'Sign in'),
                 ),
                 const SizedBox(height: 12),
@@ -158,12 +150,8 @@ class _LoginScreenState extends State<LoginScreen> {
                   'Uses an encrypted Proton session. '
                   'Credentials are never stored locally.',
                   textAlign: TextAlign.center,
-                  style: theme.textTheme.textStyle.copyWith(
-                    fontSize: 12,
-                    color: theme.textTheme.textStyle.color?.withValues(
-                      alpha: 0.6,
-                    ),
-                  ),
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.outline),
                 ),
               ],
             ),
@@ -181,19 +169,17 @@ class _ErrorBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = CupertinoTheme.of(context);
+    final theme = Theme.of(context);
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFFFEE4E2),
+        color: theme.colorScheme.errorContainer,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
         message,
-        style: theme.textTheme.textStyle.copyWith(
-          fontSize: 13,
-          color: const Color(0xFFB42318),
-        ),
+        style: theme.textTheme.bodySmall
+            ?.copyWith(color: theme.colorScheme.onErrorContainer),
       ),
     );
   }
