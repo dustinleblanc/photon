@@ -210,17 +210,19 @@ func (s *Server) original(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rc, size, err := client.OpenOriginal(r.Context(), r.PathValue("id"))
+	rc, _, err := client.OpenOriginal(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	defer rc.Close()
 
+	// Note: no Content-Length here. DownloadFileByID reports the padded
+	// encrypted size, which is larger than the decrypted bytes actually
+	// streamed; a stale Content-Length makes strict clients (Dart's
+	// HttpClient) fail with "connection closed while receiving data". Body is
+	// delivered chunked, length inferred from the wire.
 	w.Header().Set("Content-Type", "application/octet-stream")
-	if size > 0 {
-		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
-	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, rc)
 }
