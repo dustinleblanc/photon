@@ -73,19 +73,20 @@ func (c *Client) Drive() *proton.Drive {
 	return c.drive
 }
 
-// FilesDrive returns the account's regular Drive, creating it on first use.
-// Used for app-owned files (people-tags snapshot) that cannot live in the
-// photo-only share.
+// FilesDrive returns the account's regular Drive, deriving it from the
+// authenticated Photos drive on first use (same client, same token
+// lifecycle). Used for app-owned files (people-tags snapshot) that cannot
+// live in the photo-only share.
 func (c *Client) FilesDrive(ctx context.Context) (*proton.Drive, error) {
 	c.filesMu.Lock()
 	defer c.filesMu.Unlock()
 	if c.files != nil {
 		return c.files, nil
 	}
-	if c.holder == nil {
+	if c.drive == nil {
 		return nil, errors.New("no session")
 	}
-	drive, err := proton.NewFilesDrive(ctx, c.holder.Get(), c.holder)
+	drive, err := proton.FilesDrive(ctx, c.drive)
 	if err != nil {
 		return nil, err
 	}
