@@ -1,5 +1,7 @@
 import 'dart:ui' show Rect;
 
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:hive_ce/hive.dart';
 import 'package:path_provider/path_provider.dart';
@@ -26,23 +28,69 @@ class DetectionIndex extends ChangeNotifier {
 
   static const keyName = 'photon_ml_index_key';
 
-  Future<void> init() async {
+  /// Opens the boxes. [dirOverride] and [keyOverride] exist for tests; when
+  /// null the app-support directory and the platform key store are used.
+  Future<void> init({Directory? dirOverride, List<int>? keyOverride}) async {
     if (_box != null || _initializing) return;
     _initializing = true;
     try {
-      final dir = await getApplicationSupportDirectory();
+      final dir = dirOverride ?? await getApplicationSupportDirectory();
       Hive.init(dir.path);
-      final key = await IndexKeyStore.getOrCreate();
+      final key = keyOverride ?? await IndexKeyStore.getOrCreate();
       final cipher = HiveAesCipher(key);
       _box = await Hive.openBox<Map>(_boxName, encryptionCipher: cipher);
       _identitiesBox =
           await Hive.openBox<Map>(_identitiesBoxName, encryptionCipher: cipher);
+      await clearLowConfidenceAssignments();
     } catch (e) {
       _openError = e;
     } finally {
       _initializing = false;
       notifyListeners();
     }
+  }
+
+  /// Removes names that were auto-assigned below the current match threshold
+  /// (manual assignments carry similarity 1.0 and are never touched). This
+  /// undoes mistaggings left behind when the threshold used to be looser.
+  /// Idempotent and cheap; runs on every open.
+  Future<void> clearLowConfidenceAssignments() async {
+    final box = _box;
+    if (box == null) return;
+    var changed = false;
+    for (final key in box.keys) {
+      final entry = lookup(key as String);
+      if (entry == null) continue;
+      final needsFix = entry.faces.any(
+        (f) => f.name != null &&
+            f.similarity != null &&
+            f.similarity! < kDefaultFaceMatchThreshold,
+      );
+      if (!needsFix) continue;
+      await box.put(
+        entry.linkId,
+        DetectedEntry(
+          linkId: entry.linkId,
+          modelVersion: entry.modelVersion,
+          detectedAt: entry.detectedAt,
+          objects: entry.objects,
+          faces: [
+            for (final f in entry.faces)
+              f.name != null &&
+                      f.similarity != null &&
+                      f.similarity! < kDefaultFaceMatchThreshold
+                  ? DetectedFace(
+                      rect: f.rect,
+                      embedding: f.embedding,
+                      ignored: f.ignored,
+                    )
+                  : f,
+          ],
+        ).toMap(),
+      );
+      changed = true;
+    }
+    if (changed) notifyListeners();
   }
 
   DetectedEntry? lookup(String linkId) {
@@ -528,6 +576,156 @@ class DetectionIndex extends ChangeNotifier {
     }
     notifyListeners();
     return merged;
+  }
+
+  /// Merges identities synced from another device into the local store and
+  /// backfills names across stored faces. Matching is by any name (canonical
+  /// or alias); unmatched remote identities are inserted as new people, and
+  /// matches are merged with a sample-weighted centroid — the side with more
+  /// manually-named samples supplies the canonical name. Returns the merged
+  /// identity list.
+  Future<List<PersonIdentity>> applyRemoteIdentities(
+    List<PersonIdentity> remote,
+  ) async {
+    final box = _identitiesBox;
+    if (box == null) return identities;
+    final incoming = [
+      for (final id in remote)
+        if (id.name.trim().isNotEmpty && id.centroid.isNotEmpty) id,
+    ];
+    if (incoming.isEmpty) return identities;
+
+    final renamedFaces = <String, String>{};
+    for (final r in incoming) {
+      final local = identityForName(r.name) ??
+          _identityForAnyName(r.aliases);
+      if (local == null) {
+        await box.put(
+          r.name,
+          PersonIdentity(
+            name: r.name,
+            aliases: r.aliases,
+            centroid: r.centroid,
+            faceSamples: r.faceSamples,
+          ).toMap(),
+        );
+        continue;
+      }
+      final remoteView = PersonIdentity(
+        name: r.name,
+        aliases: r.aliases,
+        centroid: r.centroid,
+        faceSamples: r.faceSamples,
+      );
+      // The side with more manually-named samples wins the canonical name;
+      // the local identity goes first so its contact link survives.
+      final primary =
+          local.faceSamples >= remoteView.faceSamples ? local : remoteView;
+      final merged = mergePeople([local, remoteView], primary: primary.name);
+      if (local.name != merged.name) {
+        await box.delete(local.name);
+        renamedFaces[local.name] = merged.name;
+      }
+      await box.put(merged.name, merged.toMap());
+    }
+    if (renamedFaces.isNotEmpty) {
+      await _renameFaces(renamedFaces);
+    }
+    await rematchUnnamed();
+    return identities;
+  }
+
+  PersonIdentity? _identityForAnyName(List<String> names) {
+    for (final n in names) {
+      final id = identityForName(n);
+      if (id != null) return id;
+    }
+    return null;
+  }
+
+  /// Renames faces across all stored entries per the [renames] map.
+  Future<void> _renameFaces(Map<String, String> renames) async {
+    final detections = _box;
+    if (detections == null) return;
+    for (final key in detections.keys) {
+      final entry = lookup(key as String);
+      if (entry == null ||
+          !entry.faces.any((f) => renames.containsKey(f.name))) {
+        continue;
+      }
+      await detections.put(
+        entry.linkId,
+        DetectedEntry(
+          linkId: entry.linkId,
+          modelVersion: entry.modelVersion,
+          detectedAt: entry.detectedAt,
+          objects: entry.objects,
+          faces: [
+            for (final f in entry.faces)
+              renames.containsKey(f.name)
+                  ? DetectedFace(
+                      rect: f.rect,
+                      embedding: f.embedding,
+                      name: renames[f.name],
+                      similarity: f.similarity,
+                      ignored: f.ignored,
+                    )
+                  : f,
+          ],
+        ).toMap(),
+      );
+    }
+  }
+
+  /// Runs identity matching over every stored unnamed face (ignored faces
+  /// are skipped) and assigns names where the centroid similarity clears the
+  /// threshold. Returns the number of photos updated.
+  Future<int> rematchUnnamed() async {
+    final box = _box;
+    final ids = identities;
+    if (box == null || ids.isEmpty) return 0;
+    var updated = 0;
+    for (final key in box.keys) {
+      final entry = lookup(key as String);
+      if (entry == null) continue;
+      var changed = false;
+      final faces = [
+        for (final f in entry.faces)
+          if (f.name == null && !f.ignored)
+            () {
+              final name = matchIdentity(f.embedding, identities: ids);
+              if (name == null) return f;
+              changed = true;
+              return DetectedFace(
+                rect: f.rect,
+                embedding: f.embedding,
+                name: name,
+                similarity: faceMatchScore(
+                  f.embedding,
+                  ids.firstWhere((i) => i.name == name).centroid,
+                ),
+                ignored: f.ignored,
+              );
+            }()
+          else
+            f,
+      ];
+      if (changed) {
+        updated++;
+        await box.put(
+          entry.linkId,
+          DetectedEntry(
+            linkId: entry.linkId,
+            modelVersion: entry.modelVersion,
+            detectedAt: entry.detectedAt,
+            objects: entry.objects,
+            faces: faces,
+          ).toMap(),
+        );
+      }
+    }
+    if (updated > 0) notifyListeners();
+    return updated;
   }
 
   /// Removes an identity and unnames every face assigned to it. The faces'

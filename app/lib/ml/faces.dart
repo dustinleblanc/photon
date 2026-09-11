@@ -26,10 +26,10 @@ double faceMatchScore(Float32List a, Float32List b) =>
     fdt.FaceDetector.compareFaces(a, b);
 
 /// Below this score two faces are treated as different people. The plugin's
-/// guidance calls > 0.6 "very likely same person" and > 0.5 "probably same
-/// person"; we err on the permissive side so named people are picked up even
-/// from varying angles and lighting.
-const double kDefaultFaceMatchThreshold = 0.5;
+/// guidance calls > 0.6 "very likely same person"; 0.5 ("probably same")
+/// proved too permissive in practice — it mistagged faces across household
+/// members — so automatic matching only runs at 0.6 and up.
+const double kDefaultFaceMatchThreshold = 0.6;
 
 /// A detected face within a photo, with a [0,1]-normalized bounding box and
 /// the 192-dim embedding used for identity matching. Persisted in the index.

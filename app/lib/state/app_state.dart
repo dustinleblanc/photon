@@ -8,6 +8,7 @@ import '../api/serve_client.dart';
 import '../ml/detection_index.dart';
 import '../ml/library_scanner.dart';
 import '../sidecar/sidecar.dart';
+import '../sync/tags_sync.dart';
 
 enum AppPhase { booting, loggedOut, ready }
 
@@ -26,6 +27,9 @@ class AppState extends ChangeNotifier {
 
   /// On-device, encrypted-at-rest detection index. Android only.
   final DetectionIndex detectionIndex = DetectionIndex();
+
+  /// Cross-device people-tag sync through the host (opt-in).
+  late final TagsSync tagsSync = TagsSync(client: _client, index: detectionIndex);
 
   /// Batch object-detection job over the loaded library.
   late final LibraryScanner detector;
@@ -82,6 +86,7 @@ class AppState extends ChangeNotifier {
     if (_phase == AppPhase.ready) {
       await loadMore();
       unawaited(detectionIndex.init());
+      unawaited(tagsSync.init());
     }
   }
 
@@ -126,6 +131,8 @@ class AppState extends ChangeNotifier {
           _phase = AppPhase.ready;
           notifyListeners();
           await loadMore();
+          unawaited(detectionIndex.init());
+          unawaited(tagsSync.init());
         case LoginOutcome.hvRequired:
           _error =
               'Human verification required (${result.hvMethods?.join(', ') ?? 'captcha'}). '

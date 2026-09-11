@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../api/models.dart';
@@ -7,7 +10,7 @@ import '../ml/library_scanner.dart';
 import '../state/app_state.dart';
 import 'lightbox_screen.dart';
 import 'people_screen.dart';
-
+import 'settings_screen.dart';
 class GalleryScreen extends StatefulWidget {
   const GalleryScreen({super.key, required this.state});
 
@@ -73,11 +76,16 @@ class _GalleryScreenState extends State<GalleryScreen> {
             icon: Icon(scanner.running ? Icons.stop : Icons.psychology),
             onPressed: _toggleScan,
           ),
-          IconButton(
-            tooltip: 'Sign out',
-            icon: const Icon(Icons.logout),
-            onPressed: () => state.logout(),
-          ),
+          if (Platform.isAndroid)
+            IconButton(
+              tooltip: 'Settings',
+              icon: const Icon(Icons.settings_outlined),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => SettingsScreen(state: widget.state),
+                ),
+              ),
+            ),
         ],
       ),
       body: ListenableBuilder(
@@ -174,6 +182,9 @@ class _GalleryScreenState extends State<GalleryScreen> {
   }
 
   Future<void> _showPeopleSheet() async {
+    // Refresh from other devices before showing, so newly tagged people
+    // from the phone are already here.
+    unawaited(widget.state.tagsSync.pullAndPush());
     final selection = await Navigator.of(context).push<PeopleSelection>(
       MaterialPageRoute(builder: (_) => PeopleScreen(state: widget.state)),
     );

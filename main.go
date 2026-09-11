@@ -280,7 +280,7 @@ func resolveUploadSession(ctx context.Context) (*proton.Drive, *proton.SessionHo
 		if err := json.Unmarshal([]byte(raw), &saved); err != nil {
 			return nil, nil, fmt.Errorf("parse PROTON_UPLOAD_SESSION_JSON: %w", err)
 		}
-		return proton.Resume(ctx, saved)
+		return proton.Resume(ctx, saved, nil)
 	}
 
 	username := os.Getenv("PROTON_USERNAME")
@@ -292,7 +292,7 @@ func resolveUploadSession(ctx context.Context) (*proton.Drive, *proton.SessionHo
 		return nil, nil, fmt.Errorf("no PROTON_UPLOAD_SESSION_JSON, and PROTON_USERNAME/PROTON_PASSWORD are not set")
 	}
 
-	return proton.Login(ctx, username, password, totp, hvToken, hvMethod)
+	return proton.Login(ctx, username, password, totp, hvToken, hvMethod, nil)
 }
 
 // sessionOutPath returns where to write the (possibly rotated) session, if
@@ -879,11 +879,19 @@ func cmdServe() {
 	})
 
 	// Resume a session we already have, so a relaunch doesn't require a fresh
-	// login. Failures here are non-fatal: the UI can just sign in again.
-	if raw := os.Getenv("PROTON_UPLOAD_SESSION_JSON"); raw != "" {
+	// login. The explicit env override wins; otherwise fall back to the file
+	// a previous run wrote via --session-out. Failures here are non-fatal:
+	// the UI can just sign in again.
+	raw := os.Getenv("PROTON_UPLOAD_SESSION_JSON")
+	if raw == "" && sessionPath != "" {
+		if data, err := os.ReadFile(sessionPath); err == nil {
+			raw = string(data)
+		}
+	}
+	if raw != "" {
 		var saved proton.Session
 		if err := json.Unmarshal([]byte(raw), &saved); err == nil {
-			if client, err := core.Resume(context.Background(), saved); err == nil {
+			if client, err := core.Resume(context.Background(), saved, srv.PersistSession); err == nil {
 				srv.SetSession(client, saved)
 			}
 		}

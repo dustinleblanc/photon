@@ -42,6 +42,6 @@ require (
 	modernc.org/memory v1.12.1 // indirect
 )
 
-replace github.com/henrybear327/Proton-API-Bridge => github.com/dustinleblanc/Proton-API-Bridge v1.0.0-photon.2
+replace github.com/henrybear327/Proton-API-Bridge => ./forks/Proton-API-Bridge
 
-replace github.com/ProtonMail/go-proton-api => github.com/dustinleblanc/go-proton-api v0.4.1-photon.3
+replace github.com/ProtonMail/go-proton-api => ./forks/go-proton-api

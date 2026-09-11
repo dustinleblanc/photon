@@ -107,6 +107,32 @@ class ServeClient {
     });
   }
 
+  /// Fetches the people-tags sync document. A missing snapshot reads as
+  /// revision 0 with no identities (the server never 404s).
+  Future<Map<String, dynamic>> getTags() async {
+    final req = await _http.getUrl(_uri('/api/v1/tags'));
+    final res = await req.close();
+    return _readJson(res);
+  }
+
+  /// Pushes a tags snapshot based on [baseRevision]. Throws an
+  /// [ApiException] with statusCode 409 carrying the conflict; callers use
+  /// [getTags] to merge and retry.
+  Future<Map<String, dynamic>> putTags({
+    required int baseRevision,
+    required List<Map<String, dynamic>> identities,
+  }) async {
+    final body = jsonEncode({
+      'baseRevision': baseRevision,
+      'identities': identities,
+    });
+    final req = await _http.putUrl(_uri('/api/v1/tags'));
+    req.headers.contentType = ContentType.json;
+    req.write(body);
+    final res = await req.close();
+    return _readJson(res);
+  }
+
   /// Retries byte downloads on transient network failures. The serve streams
   /// large files (originals) through a tunnel, and a dropped keep-alive
   /// connection mid-body otherwise surfaces as "connection closed while

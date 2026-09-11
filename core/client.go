@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 
 	papi "github.com/ProtonMail/go-proton-api"
 
@@ -16,13 +17,34 @@ import (
 type Client struct {
 	drive  *proton.Drive
 	holder *proton.SessionHolder
+
+	// files is the account's regular Drive (the Photos share rejects
+	// non-photo content), created lazily on first use and guarded because
+	// construction performs network calls.
+	filesMu sync.Mutex
+	files   *proton.Drive
+
+	// onRotate, when set, is invoked with the fresh session after every
+	// token rotation so long-running processes can persist it.
+	onRotate func(proton.Session)
+}
+
+// OnRotate registers a callback invoked whenever the underlying session's
+// tokens rotate. Must be called before the client sees traffic. Safe on a
+// zero-value Client (tests construct bare ones with no live session).
+func (c *Client) OnRotate(fn func(proton.Session)) {
+	c.onRotate = fn
+	if c.holder != nil {
+		c.holder.OnRotate(fn)
+	}
 }
 
 // Login performs a fresh SRP login (optionally completing a human-verification
 // challenge) and returns the client plus the session to persist for future
-// Resume calls.
-func Login(ctx context.Context, username, password, totp, hvToken, hvMethod string) (*Client, proton.Session, error) {
-	drive, holder, err := proton.Login(ctx, username, password, totp, hvToken, hvMethod)
+// Resume calls. onRotate, when non-nil, fires on every token rotation
+// (registered before the login flow starts, so no rotation is missed).
+func Login(ctx context.Context, username, password, totp, hvToken, hvMethod string, onRotate func(proton.Session)) (*Client, proton.Session, error) {
+	drive, holder, err := proton.Login(ctx, username, password, totp, hvToken, hvMethod, onRotate)
 	if err != nil {
 		return nil, proton.Session{}, err
 	}
@@ -31,8 +53,8 @@ func Login(ctx context.Context, username, password, totp, hvToken, hvMethod stri
 
 // Resume re-establishes a client from a previously persisted session, avoiding
 // a password/2FA/captcha round-trip. Tokens refresh automatically.
-func Resume(ctx context.Context, saved proton.Session) (*Client, error) {
-	drive, holder, err := proton.Resume(ctx, saved)
+func Resume(ctx context.Context, saved proton.Session, onRotate func(proton.Session)) (*Client, error) {
+	drive, holder, err := proton.Resume(ctx, saved, onRotate)
 	if err != nil {
 		return nil, err
 	}
@@ -43,6 +65,32 @@ func Resume(ctx context.Context, saved proton.Session) (*Client, error) {
 // persist it after use.
 func (c *Client) Session() proton.Session {
 	return c.holder.Get()
+}
+
+// Drive exposes the underlying Photos-share drive for features that talk to
+// Drive directly.
+func (c *Client) Drive() *proton.Drive {
+	return c.drive
+}
+
+// FilesDrive returns the account's regular Drive, creating it on first use.
+// Used for app-owned files (people-tags snapshot) that cannot live in the
+// photo-only share.
+func (c *Client) FilesDrive(ctx context.Context) (*proton.Drive, error) {
+	c.filesMu.Lock()
+	defer c.filesMu.Unlock()
+	if c.files != nil {
+		return c.files, nil
+	}
+	if c.holder == nil {
+		return nil, errors.New("no session")
+	}
+	drive, err := proton.NewFilesDrive(ctx, c.holder.Get(), c.holder)
+	if err != nil {
+		return nil, err
+	}
+	c.files = drive
+	return drive, nil
 }
 
 // ListPhotos returns a page of the Photos timeline. cursor is the

@@ -51,6 +51,9 @@ type Session struct {
 type SessionHolder struct {
 	mu      sync.Mutex
 	session Session
+	// onRotate, when set via OnRotate, is invoked with the fresh session
+	// after every token rotation so callers can persist it immediately.
+	onRotate func(Session)
 }
 
 func (h *SessionHolder) Get() Session {
@@ -59,12 +62,35 @@ func (h *SessionHolder) Get() Session {
 	return h.session
 }
 
+// OnRotate registers a callback fired after every token rotation. Safe to
+// call concurrently with rotations; the callback itself runs on the
+// bridge's refresh goroutine and should be quick.
+func (h *SessionHolder) OnRotate(fn func(Session)) {
+	h.mu.Lock()
+	h.onRotate = fn
+	h.mu.Unlock()
+}
+
+// AuthHandler returns the bridge auth callback bound to this holder, so a
+// second drive instance (e.g. the regular Drive alongside the Photos share)
+// rotates the same shared session.
+func (h *SessionHolder) AuthHandler() func(papi.Auth) {
+	return func(auth papi.Auth) {
+		h.setTokens(auth.UID, auth.AccessToken, auth.RefreshToken)
+	}
+}
+
 func (h *SessionHolder) setTokens(uid, accessToken, refreshToken string) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	h.session.UID = uid
 	h.session.AccessToken = accessToken
 	h.session.RefreshToken = refreshToken
+	fn := h.onRotate
+	session := h.session
+	h.mu.Unlock()
+	if fn != nil {
+		fn(session)
+	}
 }
 
 func (h *SessionHolder) set(session Session) {
@@ -77,7 +103,11 @@ func (h *SessionHolder) set(session Session) {
 // verification challenge) and bootstraps a ProtonDrive scoped to the
 // account's Photos share. Returns a Session to persist for future Resume
 // calls, so subsequent runs don't need the password/2FA/captcha again.
-func Login(ctx context.Context, username, password, totp, hvToken, hvMethod string) (*Drive, *SessionHolder, error) {
+// onRotate, when non-nil, is invoked with the fresh session after every
+// token rotation -- including rotations that happen during the login flow
+// itself, which is why the hook must be registered here and not after
+// Login returns.
+func Login(ctx context.Context, username, password, totp, hvToken, hvMethod string, onRotate func(Session)) (*Drive, *SessionHolder, error) {
 	config := common.NewConfigWithDefaultValues()
 	config.AppVersion = appVersion
 	// A retry after a partly-uploaded revision would otherwise hit "draft
@@ -91,7 +121,7 @@ func Login(ctx context.Context, username, password, totp, hvToken, hvMethod stri
 		HVMethod: hvMethod,
 	}
 
-	holder := &SessionHolder{}
+	holder := &SessionHolder{onRotate: onRotate}
 	authHandler := func(auth papi.Auth) {
 		holder.setTokens(auth.UID, auth.AccessToken, auth.RefreshToken)
 	}
@@ -116,7 +146,7 @@ func Login(ctx context.Context, username, password, totp, hvToken, hvMethod stri
 // automatically (via the client's built-in 401 handling) if it has expired;
 // the returned Session reflects any such rotation, so callers should
 // persist it again after use.
-func Resume(ctx context.Context, saved Session) (*Drive, *SessionHolder, error) {
+func Resume(ctx context.Context, saved Session, onRotate func(Session)) (*Drive, *SessionHolder, error) {
 	// SaltedKeyPass is what unlocks the user's keyring. Without it the
 	// bridge fails deep in the crypto with "private key checksum failure",
 	// which gives no hint that the session is simply incomplete -- as
@@ -138,7 +168,7 @@ func Resume(ctx context.Context, saved Session) (*Drive, *SessionHolder, error) 
 		SaltedKeyPass: saved.SaltedKeyPass,
 	}
 
-	holder := &SessionHolder{session: saved}
+	holder := &SessionHolder{session: saved, onRotate: onRotate}
 	authHandler := func(auth papi.Auth) {
 		holder.setTokens(auth.UID, auth.AccessToken, auth.RefreshToken)
 	}
@@ -148,6 +178,32 @@ func Resume(ctx context.Context, saved Session) (*Drive, *SessionHolder, error) 
 		return nil, nil, err
 	}
 	return drive, holder, nil
+}
+
+// NewFilesDrive opens the account's regular Drive (not the Photos share) for
+// the same session. The Photos share rejects non-photo content (422), so
+// app-owned files like the people-tags snapshot live in the regular Drive
+// instead. Token rotations feed the same SessionHolder as the Photos drive.
+func NewFilesDrive(ctx context.Context, saved Session, holder *SessionHolder) (*Drive, error) {
+	if saved.SaltedKeyPass == "" || saved.UID == "" || saved.RefreshToken == "" {
+		return nil, fmt.Errorf("stored session is incomplete (missing %s) -- sign in again to replace it", missingSessionFields(saved))
+	}
+
+	config := common.NewConfigWithDefaultValues()
+	config.AppVersion = appVersion
+	config.UseReusableLogin = true
+	config.ReusableCredential = &common.ReusableCredentialData{
+		UID:           saved.UID,
+		AccessToken:   saved.AccessToken,
+		RefreshToken:  saved.RefreshToken,
+		SaltedKeyPass: saved.SaltedKeyPass,
+	}
+
+	drive, _, err := bridge.NewProtonDrive(ctx, config, holder.AuthHandler(), func() {})
+	if err != nil {
+		return nil, err
+	}
+	return drive, nil
 }
 
 func missingSessionFields(s Session) string {
