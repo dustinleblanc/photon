@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 
 import '../state/app_state.dart';
 
@@ -37,9 +37,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Scaffold(
-      body: Center(
+    final theme = CupertinoTheme.of(context);
+    return CupertinoPageScaffold(
+      child: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(32),
           child: ConstrainedBox(
@@ -49,60 +49,52 @@ class _LoginScreenState extends State<LoginScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Icon(
-                  Icons.photo_library_outlined,
+                  CupertinoIcons.photo,
                   size: 56,
-                  color: theme.colorScheme.primary,
+                  color: theme.primaryColor,
                 ),
                 const SizedBox(height: 12),
                 Text(
                   'Photon Library',
                   textAlign: TextAlign.center,
-                  style: theme.textTheme.headlineSmall,
+                  style: theme.textTheme.textStyle.copyWith(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 const SizedBox(height: 24),
                 if (widget.state.error != null) ...[
                   _ErrorBanner(message: widget.state.error!),
                   const SizedBox(height: 12),
                 ],
-                TextField(
+                CupertinoTextField(
                   controller: _username,
-                  decoration: const InputDecoration(
-                    labelText: 'Proton username',
-                    border: OutlineInputBorder(),
-                  ),
-                  autofillHints: const [AutofillHints.username],
+                  placeholder: 'Proton username',
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   autocorrect: false,
+                  enableSuggestions: false,
                 ),
-                const SizedBox(height: 12),
-                TextField(
+                const SizedBox(height: 10),
+                CupertinoTextField(
                   controller: _password,
-                  decoration: const InputDecoration(
-                    labelText: 'Password',
-                    border: OutlineInputBorder(),
-                  ),
+                  placeholder: 'Password',
                   obscureText: true,
-                  autofillHints: const [AutofillHints.password],
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   onSubmitted: (_) => _submit(),
                 ),
-                const SizedBox(height: 12),
-                TextField(
+                const SizedBox(height: 10),
+                CupertinoTextField(
                   controller: _totp,
-                  decoration: const InputDecoration(
-                    labelText: 'Two-factor code (optional)',
-                    border: OutlineInputBorder(),
-                  ),
+                  placeholder: 'Two-factor code (optional)',
                   keyboardType: TextInputType.number,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   onSubmitted: (_) => _submit(),
                 ),
                 const SizedBox(height: 20),
-                FilledButton(
+                CupertinoButton.filled(
                   onPressed: _busy ? null : _submit,
                   child: _busy
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
+                      ? const CupertinoActivityIndicator()
                       : const Text('Sign in'),
                 ),
                 const SizedBox(height: 12),
@@ -110,8 +102,12 @@ class _LoginScreenState extends State<LoginScreen> {
                   'Uses an encrypted Proton session. '
                   'Credentials are never stored locally.',
                   textAlign: TextAlign.center,
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.outline),
+                  style: theme.textTheme.textStyle.copyWith(
+                    fontSize: 12,
+                    color: theme.textTheme.textStyle.color?.withValues(
+                      alpha: 0.6,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -129,17 +125,19 @@ class _ErrorBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final theme = CupertinoTheme.of(context);
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: theme.colorScheme.errorContainer,
+        color: const Color(0xFFFEE4E2),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
         message,
-        style: theme.textTheme.bodySmall
-            ?.copyWith(color: theme.colorScheme.onErrorContainer),
+        style: theme.textTheme.textStyle.copyWith(
+          fontSize: 13,
+          color: const Color(0xFFB42318),
+        ),
       ),
     );
   }
