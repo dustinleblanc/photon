@@ -285,9 +285,15 @@ later best-effort goal.
 ## 9. Phasing (one client at a time)
 
 - **M0 — Core extraction.** Refactor `photon` internals into a reusable `core`
-  module; define ports; add `photon-serve` HTTP API. No UI.
+  module; define ports; add `photon-serve` HTTP API. No UI. **Done.**
 - **M1 — Desktop browse (Flutter).** Grid, lightbox, thumbnail cache, on-demand
   originals. macOS first, then Linux/Windows. Core as sidecar process.
+  **Status: macOS first vertical slice in `app/`** — Flutter app, Dart API
+  client, sidecar manager (spawns `photon serve`, health-checks, teardown),
+  login/session UI, paginated grid with in-memory preview cache. Reaches the
+  login screen with a live sidecar. Remaining gaps: Human Verification UI
+  (WPWebView captcha), disk-backed preview cache, session in Keychain via
+  `flutter_secure_storage`, Linux/Windows targets.
 - **M2 — Export/convert/resize.** Pure-Go codecs + bundled ffmpeg; presets; batch.
 - **M3 — Albums / folders / tags + hidden.** Catalog work + central predicate.
 - **M4 — Android client** (GrapheneOS, sideloaded). Core via gomobile; same Flutter UI.
