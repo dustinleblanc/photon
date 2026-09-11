@@ -5,6 +5,7 @@ import '../ml/detection.dart';
 import '../ml/detection_index.dart';
 import '../ml/faces.dart';
 import '../state/app_state.dart';
+import 'contact_picker.dart';
 
 /// A sheet listing the detected faces in one photo. Tapping a face names it,
 /// which also backfills the name onto every other already-scanned photo that
@@ -125,6 +126,14 @@ class _PeoplePanelState extends State<PeoplePanel> {
                         ),
                         onPressed: () => Navigator.pop(dialogContext, id.name),
                       ),
+                    ActionChip(
+                      avatar: const CircleAvatar(
+                        child: Icon(Icons.contacts, size: 16),
+                      ),
+                      label: const Text('Link a contact…'),
+                      onPressed: () =>
+                          Navigator.pop(dialogContext, kLinkContact),
+                    ),
                   ],
                 ),
                 const Divider(height: 24),
@@ -134,6 +143,12 @@ class _PeoplePanelState extends State<PeoplePanel> {
                 ),
                 const SizedBox(height: 8),
               ],
+              TextButton.icon(
+                onPressed: () => Navigator.pop(dialogContext, kLinkContact),
+                icon: const Icon(Icons.contact_phone, size: 18),
+                label: const Text('Link a contact…'),
+              ),
+              const SizedBox(height: 12),
               TextField(
                 controller: controller,
                 autofocus: known.isEmpty,
@@ -166,24 +181,42 @@ class _PeoplePanelState extends State<PeoplePanel> {
       ),
     );
     if (name == null || name.isEmpty || !mounted) return;
+    String resolvedName = name;
+    String? contactId;
+    String? contactDisplayName;
+    if (name == kLinkContact) {
+      final contact = await ContactPicker.pick(context);
+      if (contact == null || !mounted) return;
+      resolvedName = contact.name.isEmpty
+          ? DetectionIndex.kUnnamedPeople
+          : contact.name;
+      contactId = contact.id;
+      contactDisplayName = contact.name;
+    }
     setState(() => _naming = true);
     final matched = await _index.nameFace(
       linkId: widget.linkId,
       faceIndex: index,
-      name: name,
+      name: resolvedName,
+      contactId: contactId,
+      contactDisplayName: contactDisplayName,
     );
     if (!mounted) return;
     setState(() {
       _naming = false;
       _faces = _index.facesFor(widget.linkId);
     });
-    final resolved = _index.identityForName(name)?.name ?? name;
+    final resolved =
+        _index.identityForName(resolvedName)?.name ?? resolvedName;
+    final extra = contactId != null && contactDisplayName != null
+        ? ' · linked to $contactDisplayName'
+        : '';
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
           matched <= 0
-              ? 'Named $resolved'
-              : 'Named $resolved · matched in $matched other ${matched == 1 ? 'photo' : 'photos'}',
+              ? 'Named $resolved$extra'
+              : 'Named $resolved$extra · matched in $matched other ${matched == 1 ? 'photo' : 'photos'}',
         ),
       ),
     );

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-11
+
+### Added
+
+- People can now be linked to a device contact (Android): a "Link a
+  contact…" button in the photo People panel and in the gallery People sheet
+  opens a searchable contact picker, and the chosen person's name and photo
+  are used for the identity. Linked people show their contact picture and
+  display name in the People sheet, and the link can be unlinked again.
+  READ_CONTACTS is requested at first use.
+
+### Changed
+
+- Face-match threshold loosened from 0.6 to 0.5 so a person is picked up
+  across more varied angles and lighting (the scanner's guidance rates 0.5 as
+  "probably the same person").
+
 ## [0.4.0] - 2026-09-11
 
 ### Added

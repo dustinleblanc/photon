@@ -124,6 +124,63 @@ void main() {
     expect(restored.centroid, id.centroid);
   });
 
+  test('PersonIdentity roundtrips its contact link', () {
+    final id = PersonIdentity(
+      name: 'Mom',
+      centroid: Float32List.fromList([0.5]),
+      faceSamples: 2,
+      contactId: '42',
+      contactDisplayName: 'Karen W.',
+      contactPhotoUri: 'content://com.android.contacts/42/photo',
+    );
+
+    final restored = PersonIdentity.fromMap(id.toMap());
+
+    expect(restored.contactId, '42');
+    expect(restored.contactDisplayName, 'Karen W.');
+    expect(restored.contactPhotoUri, isNotNull);
+    expect(restored.linkedToContact, isTrue);
+  });
+
+  test('mergePeople keeps the first person\'s contact link', () {
+    final a = PersonIdentity(
+      name: 'Mom',
+      centroid: Float32List.fromList([1, 0]),
+      faceSamples: 1,
+      contactId: '7',
+      contactDisplayName: 'Karen W.',
+    );
+    final b = PersonIdentity(
+      name: 'Karen',
+      centroid: Float32List.fromList([0, 1]),
+      faceSamples: 1,
+    );
+
+    final merged = mergePeople([a, b]);
+
+    expect(merged.contactId, '7');
+    expect(merged.contactDisplayName, 'Karen W.');
+    expect(merged.linkedToContact, isTrue);
+  });
+
+  test('mergePeople drops the contact link when nobody is linked', () {
+    final a = PersonIdentity(
+      name: 'Mom',
+      centroid: Float32List.fromList([1, 0]),
+      faceSamples: 1,
+    );
+    final b = PersonIdentity(
+      name: 'Karen',
+      centroid: Float32List.fromList([0, 1]),
+      faceSamples: 1,
+    );
+
+    final merged = mergePeople([a, b]);
+
+    expect(merged.linkedToContact, isFalse);
+    expect(merged.contactId, isNull);
+  });
+
   test('mergePeople unions names and averages centroids by sample count', () {
     final a = PersonIdentity(
       name: 'Mom',
