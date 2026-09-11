@@ -22,6 +22,15 @@ class AppState extends ChangeNotifier {
   String? _error;
   String? get error => _error;
 
+  bool _totpRequired = false;
+  bool get totpRequired => _totpRequired;
+
+  @visibleForTesting
+  void requireTotpForTest() {
+    _totpRequired = true;
+    _phase = AppPhase.loggedOut;
+  }
+
   final List<Photo> _photos = [];
   List<Photo> get photos => List.unmodifiable(_photos);
 
@@ -62,6 +71,11 @@ class AppState extends ChangeNotifier {
   }
 
   void _prepareSessionFiles() {
+    if (Platform.isAndroid) {
+      _sessionOutPath = '';
+      _savedSessionJson = null;
+      return;
+    }
     final home = Platform.environment['HOME'] ?? Directory.current.path;
     final dir = Directory(
       '$home/Library/Application Support/photon-library',
@@ -82,6 +96,7 @@ class AppState extends ChangeNotifier {
     String? totp,
   }) async {
     _error = null;
+    _totpRequired = false;
     notifyListeners();
     try {
       final json = await _client.login(
@@ -100,6 +115,9 @@ class AppState extends ChangeNotifier {
           _error =
               'Human verification required (${result.hvMethods?.join(', ') ?? 'captcha'}). '
               'Solve it in a browser and pass hvToken/hvMethod.';
+          notifyListeners();
+        case LoginOutcome.totpRequired:
+          _totpRequired = true;
           notifyListeners();
         case LoginOutcome.error:
           _error = result.error ?? 'Login failed';
@@ -169,6 +187,7 @@ class AppState extends ChangeNotifier {
   Future<Uint8List> original(String linkId) => _client.original(linkId);
 
   void _persistRotatedSession() {
+    if (_sessionOutPath.isEmpty) return;
     try {
       final f = File(_sessionOutPath);
       if (f.existsSync()) {
@@ -182,6 +201,7 @@ class AppState extends ChangeNotifier {
   }
 
   void _cleanupSessionFiles() {
+    if (_sessionOutPath.isEmpty) return;
     try {
       final home = Platform.environment['HOME'] ?? Directory.current.path;
       final dir = Directory(
