@@ -81,9 +81,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     if (_phase == AppPhase.ready) {
       await loadMore();
-      if (Platform.isAndroid) {
-        unawaited(detectionIndex.init());
-      }
+      unawaited(detectionIndex.init());
     }
   }
 

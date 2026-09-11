@@ -132,17 +132,16 @@ class _LightboxPageState extends State<_LightboxPage> {
                     _saveToGallery();
                   },
                 ),
-                if (Platform.isAndroid)
-                  ListTile(
-                    leading: const Icon(Icons.face),
-                    title: const Text('People'),
-                    enabled: !_busy,
-                    onTap: () {
-                      Navigator.pop(sheetContext);
-                      _showPeople();
-                    },
-                  ),
               ],
+              ListTile(
+                leading: const Icon(Icons.face),
+                title: const Text('People'),
+                enabled: !_busy,
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _showPeople();
+                },
+              ),
               ListTile(
                 leading: const Icon(Icons.share),
                 title: const Text('Share'),

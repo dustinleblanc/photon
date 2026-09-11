@@ -1,23 +1,20 @@
-import 'dart:convert';
-import 'dart:math';
+import 'dart:ui' show Rect;
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:hive_ce/hive.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../platform/index_key_store.dart';
 import 'detection.dart';
 import 'faces.dart';
 
 /// On-device, encrypted-at-rest index of detection results keyed by photo
 /// linkId, plus a store of named people (face-recognition identities). The
-/// AES key lives in the platform secure storage; nothing in this store ever
-/// leaves the device.
+/// AES key lives in the platform secure storage (or a 0600 file on desktop);
+/// nothing in this store ever leaves the device.
 class DetectionIndex extends ChangeNotifier {
   static const _boxName = 'detections_v1';
   static const _identitiesBoxName = 'identities_v1';
-  static const _keyName = 'photon_ml_index_key';
-  static const _storage = FlutterSecureStorage();
 
   Box<Map>? _box;
   Box<Map>? _identitiesBox;
@@ -27,7 +24,7 @@ class DetectionIndex extends ChangeNotifier {
   bool get available => _box != null;
   Object? get error => _openError;
 
-  static const keyName = _keyName;
+  static const keyName = 'photon_ml_index_key';
 
   Future<void> init() async {
     if (_box != null || _initializing) return;
@@ -35,7 +32,7 @@ class DetectionIndex extends ChangeNotifier {
     try {
       final dir = await getApplicationSupportDirectory();
       Hive.init(dir.path);
-      final key = await _key();
+      final key = await IndexKeyStore.getOrCreate();
       final cipher = HiveAesCipher(key);
       _box = await Hive.openBox<Map>(_boxName, encryptionCipher: cipher);
       _identitiesBox =
@@ -46,17 +43,6 @@ class DetectionIndex extends ChangeNotifier {
       _initializing = false;
       notifyListeners();
     }
-  }
-
-  Future<Uint8List> _key() async {
-    final existing = await _storage.read(key: _keyName);
-    if (existing != null) return base64Decode(existing);
-    final rng = Random.secure();
-    final key = Uint8List.fromList(
-      List<int>.generate(32, (_) => rng.nextInt(256)),
-    );
-    await _storage.write(key: _keyName, value: base64Encode(key));
-    return key;
   }
 
   DetectedEntry? lookup(String linkId) {
@@ -101,9 +87,81 @@ class DetectionIndex extends ChangeNotifier {
 
   /// True when the photo has at least one detected but unnamed face.
   bool hasUnnamedFace(String linkId) =>
-      facesFor(linkId).any((f) => f.name == null);
+      facesFor(linkId).any((f) => f.name == null && !f.ignored);
 
   int get scannedCount => _box?.length ?? 0;
+
+  /// All stored entries, for diagnostics tooling only.
+  Map<String, DetectedEntry> debugEntries() {
+    final box = _box;
+    if (box == null) return const {};
+    return {
+      for (final key in box.keys) key: ?lookup(key as String),
+    };
+  }
+
+  /// For every named identity, the largest stored face across the library —
+  /// the best thumbnail source — keyed by identity name. Pure lookup over the
+  /// detection box; callers fetch and crop the photo themselves.
+  Map<String, ({String linkId, Rect rect})> bestFaces() {
+    final box = _box;
+    if (box == null) return const {};
+    final best = <String, ({String linkId, Rect rect, double area})>{};
+    for (final key in box.keys) {
+      final entry = lookup(key as String);
+      if (entry == null) continue;
+      for (final f in entry.faces) {
+        final name = f.name;
+        if (name == null) continue;
+        final area = f.rect.width * f.rect.height;
+        final cur = best[name];
+        if (cur == null || area > cur.area) {
+          best[name] = (linkId: key, rect: f.rect, area: area);
+        }
+      }
+    }
+    return {
+      for (final e in best.entries)
+        e.key: (linkId: e.value.linkId, rect: e.value.rect),
+    };
+  }
+
+  /// Every detected-but-unnamed, non-ignored face across the library, in
+  /// photo order. This is the worklist for the unnamed-people page.
+  List<({String linkId, int faceIndex, Rect rect})> unnamedFaces() {
+    final box = _box;
+    if (box == null) return const [];
+    final out = <({String linkId, int faceIndex, Rect rect})>[];
+    for (final key in box.keys) {
+      final entry = lookup(key as String);
+      if (entry == null) continue;
+      for (var i = 0; i < entry.faces.length; i++) {
+        final f = entry.faces[i];
+        if (f.name == null && !f.ignored) {
+          out.add((linkId: key, faceIndex: i, rect: f.rect));
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Marks the face at [faceIndex] of [linkId] as ignored: it stops counting
+  /// as unnamed and drops out of the unnamed-people worklist. The embedding
+  /// is kept so the face can still be named later from the photo's panel.
+  Future<void> ignoreFace(String linkId, int faceIndex) async {    final entry = lookup(linkId);
+    if (entry == null || faceIndex < 0 || faceIndex >= entry.faces.length) {
+      return;
+    }
+    final f = entry.faces[faceIndex];
+    entry.faces[faceIndex] = DetectedFace(
+      rect: f.rect,
+      embedding: f.embedding,
+      name: f.name,
+      similarity: f.similarity,
+      ignored: true,
+    );
+    await put(entry);
+  }
 
   Future<void> clear() async {
     await _box?.clear();
@@ -152,7 +210,7 @@ class DetectionIndex extends ChangeNotifier {
         for (final name in names) {
           counts[name] = (counts[name] ?? 0) + 1;
         }
-        if (entry.faces.any((f) => f.name == null)) unnamed++;
+        if (entry.faces.any((f) => f.name == null && !f.ignored)) unnamed++;
       }
     }
     counts[kUnnamedPeople] = unnamed;

@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-11
+
+### Added
+
+- macOS desktop support for the ML features: the scan button, People filter
+  bar, and per-photo People panel now work on the Mac (the face models run
+  through the plugin's native-assets path, producing the same 192-dim
+  embeddings as Android).
+- People browser as a full screen: one photo tile per person (their largest
+  detected face, cropped with padding for context), type-ahead search across
+  names and aliases in the app bar, per-tile menu for editing names/aliases,
+  contact linking (Android), and deletion, plus combine-to-one-person mode.
+- Unnamed-people worklist page: a grid of face captures with quick naming
+  fields (type-ahead over existing people) and an ignore action. Naming or
+  ignoring a face drops it off the page immediately; ignored faces stop
+  counting as unnamed and can still be named later from a photo's panel.
+- Filtering by a person now shows their name as the app bar title with a
+  back button to return to the unfiltered gallery.
+- Diagnostics tools for face detection and index contents on the host
+  (`app/tool/`).
+
+### Fixed
+
+- The detection index now opens on macOS: debug builds lack the keychain
+  entitlements flutter_secure_storage needs (errSecMissingEntitlement
+  -34018), so identities were silently never persisted. The index key now
+  falls back to a 0600 file in the app support directory on non-Android
+  platforms.
+- Face grids recycled tile state by position, so a tile that dropped off
+  kept its stale thumbnail; grids now use stable keys.
+- Tiny faces (e.g. a distant child in the frame corner) produced unusable
+  thumbnail crops; face crops are now padded 35% on every side.
+
 ## [0.5.0] - 2026-09-11
 
 ### Added
