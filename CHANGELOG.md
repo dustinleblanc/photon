@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-11
+
+### Added
+
+- Cross-device people-tag sync (opt-in): identities (name, aliases, centroid,
+  sample count) sync through an E2E-encrypted `tags.json` in the account's
+  regular Proton Drive — via new `GET/PUT /api/v1/tags` endpoints on the host
+  with optimistic concurrency (stale writes get a 409 and merge-and-retry).
+  Contact links and ignore flags stay device-local. Toggle lives in the new
+  Settings screen; pulls happen when the People screen opens, pushes are
+  debounced after tagging.
+- Settings screen: tag-sync toggle with live status ("last synced", errors,
+  Sync now), sign out. Reachable from the macOS app menu (Settings…, ⌘,) and
+  a gear icon on Android.
+- Remote identities merge into the local index name/alias-aware with
+  sample-weighted centroids, then unnamed faces are backfilled automatically.
+
+### Fixed
+
+- Cross-device sync reliability: the tags snapshot now lives in the regular
+  Drive (the Photos share rejects non-photo content, 422); the files drive is
+  derived from the authenticated Photos drive sharing one token lifecycle —
+  two bridge clients each running a token manager consumed Proton's
+  single-use refresh tokens and poisoned the session; uploads replace the
+  file revision in place instead of upload-then-trash; orphaned draft files
+  from failed commits are cleaned up before uploading; token rotations are
+  persisted from the moment a client is constructed (login, resume, serve).
+- Person tiles could show a photo of a different person: thumbnails now rank
+  by confidence (manually confirmed faces first, similarity next, area as
+  tiebreaker) instead of raw face size.
+- Automatic face matching now requires the best identity to beat the
+  runner-up by a margin (0.05), so lookalikes (siblings) stay unnamed
+  instead of being confidently mistagged; a reconciliation pass on index
+  open re-derives existing auto-assigned names under the current rules and
+  clears ones that no longer hold.
+
 ## [0.6.0] - 2026-09-11
 
 ### Added
