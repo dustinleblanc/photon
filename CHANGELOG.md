@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-11
+
+### Added
+
+- On-device machine learning (Android, fully offline, encrypted at rest):
+  - "Scan library" batch job runs EfficientDet-Lite2 object detection and
+    MobileFaceNet face detection + 192-dim embeddings per photo, right on the
+    phone, and stores results in an AES-256-encrypted Hive index whose key
+    lives in the platform secure storage. Nothing ever leaves the device.
+  - Gallery filters: People / Pets / Objects chips over the live detection
+    index, with an "unnamed people" bucket.
+  - Person tagging from a photo's People sheet: name a detected face and the
+    index backfills the name across every already-scanned photo that matches
+    (matching uses the stored embeddings, no re-inference needed).
+  - People can go by multiple names: identities support aliases, typing a name
+    already belonging to someone reuses that identity, and known people can be
+    combined into one person with the sample-weighted centroid kept.
+  - Correct-mismatch flow: a face auto-matched to the wrong person (or seen as
+    "new") can be re-tagged onto any existing person from the People panel.
+
 ## [0.3.0] - 2026-09-11
 
 ### Added

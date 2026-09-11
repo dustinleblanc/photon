@@ -6,6 +6,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../platform/gallery.dart';
 import '../state/app_state.dart';
+import 'people_panel.dart';
 
 class LightboxScreen extends StatefulWidget {
   const LightboxScreen({
@@ -131,6 +132,16 @@ class _LightboxPageState extends State<_LightboxPage> {
                     _saveToGallery();
                   },
                 ),
+                if (Platform.isAndroid)
+                  ListTile(
+                    leading: const Icon(Icons.face),
+                    title: const Text('People'),
+                    enabled: !_busy,
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      _showPeople();
+                    },
+                  ),
               ],
               ListTile(
                 leading: const Icon(Icons.share),
@@ -163,6 +174,15 @@ class _LightboxPageState extends State<_LightboxPage> {
           ),
         );
       },
+    );
+  }
+
+  Future<void> _showPeople() {
+    return showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => PeoplePanel(state: widget.state, linkId: widget.linkId),
     );
   }
 
