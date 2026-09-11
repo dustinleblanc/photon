@@ -1,0 +1,6 @@
+[submodule "forks/Proton-API-Bridge"]
+	path = forks/Proton-API-Bridge
+	url = https://github.com/dustinleblanc/Proton-API-Bridge.git
+[submodule "forks/go-proton-api"]
+	path = forks/go-proton-api
+	url = https://github.com/dustinleblanc/go-proton-api.git

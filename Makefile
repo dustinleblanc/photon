@@ -37,8 +37,12 @@ setup: ## Fetch Go + Flutter dependencies
 # Build
 # ---------------------------------------------------------------------------
 
+.PHONY: submodules
+submodules: ## Initialize/update the vendored fork submodules
+	git submodule update --init --recursive
+
 .PHONY: build
-build: ## Build the photon Go binary (the serve sidecar)
+build: submodules ## Build the photon Go binary (the serve sidecar)
 	mkdir -p build
 	go build -o $(PHOTON) .
 

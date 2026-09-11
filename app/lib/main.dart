@@ -1,12 +1,28 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'screens/gallery_screen.dart';
 import 'screens/login_screen.dart';
+import 'screens/settings_screen.dart';
 import 'state/app_state.dart';
+
+final navigatorKey = GlobalKey<NavigatorState>();
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   final state = AppState()..init();
+
+  // macOS native menu: Settings… (⌘,) arrives over this channel.
+  const appChannel = MethodChannel('photon/app');
+  appChannel.setMethodCallHandler((call) async {
+    debugPrint('app channel: ${call.method}');
+    if (call.method == 'openSettings') {
+      navigatorKey.currentState?.push(
+        MaterialPageRoute(builder: (_) => SettingsScreen(state: state)),
+      );
+    }
+  });
+
   runApp(PhotonLibraryApp(state: state));
 }
 
@@ -27,6 +43,7 @@ class PhotonLibraryApp extends StatelessWidget {
           AppPhase.ready => GalleryScreen(state: state),
         };
         return MaterialApp(
+          navigatorKey: navigatorKey,
           title: 'Photon Library',
           debugShowCheckedModeBanner: false,
           theme: ThemeData(

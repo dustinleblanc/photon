@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -19,6 +20,11 @@ type Server struct {
 	mu      sync.Mutex
 	client  *Client
 	session proton.Session
+	tags    TagsStore
+
+	// driveFor resolves the drive backing the tags store; swapped out in
+	// tests so the in-memory store never touches the network.
+	driveFor func(context.Context, *Client) (*proton.Drive, error)
 
 	// onSession, if set, is invoked after login/resume so the caller can
 	// persist the (possibly rotated) session.
@@ -28,16 +34,36 @@ type Server struct {
 // NewServer returns an unauthenticated server. Seed an existing session with
 // SetSession, or let the UI call POST /api/v1/auth/login.
 func NewServer(onSession func(proton.Session) error) *Server {
-	return &Server{onSession: onSession}
+	s := &Server{onSession: onSession, tags: DriveTagsStore{}}
+	s.driveFor = defaultDriveFor
+	return s
+}
+
+// defaultDriveFor lazily opens the account's regular Drive for tags I/O.
+func defaultDriveFor(ctx context.Context, client *Client) (*proton.Drive, error) {
+	return client.FilesDrive(ctx)
+}
+
+// PersistSession exposes the session-persistence callback (used by cmdServe
+// to keep the on-disk session fresh across token rotations from the very
+// first request).
+func (s *Server) PersistSession(session proton.Session) {
+	s.persistSession(session)
 }
 
 // SetSession seeds an already-resumed client + session (e.g. from a session
 // the CLI read off disk at startup).
 func (s *Server) SetSession(client *Client, session proton.Session) {
+	client.OnRotate(s.persistSession)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.client = client
 	s.session = session
+}
+
+// SetTagsStore swaps the snapshot store (tests use an in-memory one).
+func (s *Server) SetTagsStore(store TagsStore) {
+	s.tags = store
 }
 
 // Handler builds the mux. Split out so tests can drive it without a listener.
@@ -50,6 +76,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/assets", s.listAssets)
 	mux.HandleFunc("GET /api/v1/assets/{id}/original", s.original)
 	mux.HandleFunc("GET /api/v1/assets/{id}/preview", s.preview)
+	mux.HandleFunc("GET /api/v1/tags", s.getTags)
+	mux.HandleFunc("PUT /api/v1/tags", s.putTags)
 	return logRequests(mux)
 }
 
@@ -121,7 +149,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, session, err := Login(r.Context(), req.Username, req.Password, req.Totp, req.HVToken, req.HVMethod)
+	client, session, err := Login(r.Context(), req.Username, req.Password, req.Totp, req.HVToken, req.HVMethod, s.persistSession)
 	if err != nil {
 		var hv *proton.HVRequiredError
 		switch {
@@ -141,6 +169,8 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	client.OnRotate(s.persistSession)
+	client.OnRotate(s.persistSession)
 	s.mu.Lock()
 	s.client = client
 	s.session = session
