@@ -1,16 +1,12 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 
 import '../api/models.dart';
 import '../ml/detection.dart';
 import '../ml/detection_index.dart';
-import '../ml/faces.dart';
 import '../ml/library_scanner.dart';
-import '../platform/contacts.dart';
 import '../state/app_state.dart';
-import 'contact_picker.dart';
 import 'lightbox_screen.dart';
+import 'people_screen.dart';
 
 class GalleryScreen extends StatefulWidget {
   const GalleryScreen({super.key, required this.state});
@@ -25,7 +21,6 @@ class _GalleryScreenState extends State<GalleryScreen> {
   final _scroll = ScrollController();
   DetectionGroup? _filter;
   String? _personName;
-  bool _unnamed = false;
 
   @override
   void initState() {
@@ -62,14 +57,22 @@ class _GalleryScreenState extends State<GalleryScreen> {
     final scanner = state.detector;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Photon Library'),
+        automaticallyImplyLeading: false,
+        title: Text(_personName ?? 'Photon Library'),
+        leading: _personName != null
+            ? BackButton(
+                onPressed: () => setState(() {
+                  _filter = null;
+                  _personName = null;
+                }),
+              )
+            : null,
         actions: [
-          if (Platform.isAndroid)
-            IconButton(
-              tooltip: scanner.running ? 'Stop scanning' : 'Scan for objects',
-              icon: Icon(scanner.running ? Icons.stop : Icons.psychology),
-              onPressed: _toggleScan,
-            ),
+          IconButton(
+            tooltip: scanner.running ? 'Stop scanning' : 'Scan for objects',
+            icon: Icon(scanner.running ? Icons.stop : Icons.psychology),
+            onPressed: _toggleScan,
+          ),
           IconButton(
             tooltip: 'Sign out',
             icon: const Icon(Icons.logout),
@@ -102,15 +105,13 @@ class _GalleryScreenState extends State<GalleryScreen> {
           return Column(
             children: [
               if (scanner.running) _ScanProgress(scanner: scanner),
-              if (Platform.isAndroid) _FilterBar(
+              _FilterBar(
                 selected: _filter,
                 personName: _personName,
-                unnamed: _unnamed,
                 scannedCount: index.scannedCount,
                 onSelected: (g) => setState(() {
                   _filter = g;
                   _personName = null;
-                  _unnamed = false;
                 }),
                 onPeople: _showPeopleSheet,
               ),
@@ -119,8 +120,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
                     ? _EmptyFilter(
                         group: _filter,
                         personName: _personName,
-                        unnamed: _unnamed,
-                        scannedCount: index.scannedCount,
+                                scannedCount: index.scannedCount,
                         onScan: _filter == null && _personName == null
                             ? null
                             : _toggleScan,
@@ -169,24 +169,18 @@ class _GalleryScreenState extends State<GalleryScreen> {
 
   bool _matches(DetectionIndex index, String linkId) {
     if (_personName != null) return index.peopleFor(linkId).contains(_personName);
-    if (_unnamed) return index.hasUnnamedFace(linkId);
     if (_filter != null) return index.groupsFor(linkId).contains(_filter);
     return true;
   }
 
   Future<void> _showPeopleSheet() async {
-    final index = widget.state.detectionIndex;
-    final selection = await showModalBottomSheet<_PeopleSelection>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (_) => _PeopleSheet(index: index),
+    final selection = await Navigator.of(context).push<PeopleSelection>(
+      MaterialPageRoute(builder: (_) => PeopleScreen(state: widget.state)),
     );
     if (selection == null || !mounted) return;
     setState(() {
       _filter = null;
       _personName = selection.name;
-      _unnamed = selection.unnamed;
     });
   }
 
@@ -240,7 +234,6 @@ class _FilterBar extends StatelessWidget {
   const _FilterBar({
     required this.selected,
     required this.personName,
-    required this.unnamed,
     required this.scannedCount,
     required this.onSelected,
     required this.onPeople,
@@ -248,14 +241,13 @@ class _FilterBar extends StatelessWidget {
 
   final DetectionGroup? selected;
   final String? personName;
-  final bool unnamed;
   final int scannedCount;
   final ValueChanged<DetectionGroup?> onSelected;
   final VoidCallback onPeople;
 
   @override
   Widget build(BuildContext context) {
-    final personActive = personName != null || unnamed;
+    final personActive = personName != null;
     final chips = <Widget>[
       Padding(
         padding: const EdgeInsets.only(left: 12),
@@ -270,7 +262,7 @@ class _FilterBar extends StatelessWidget {
         child: FilterChip(
           avatar: const Icon(Icons.face, size: 18),
           label: Text(
-            personName ?? (unnamed ? 'Unnamed' : 'People'),
+            personName ?? 'People',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -354,14 +346,12 @@ class _EmptyFilter extends StatelessWidget {
   const _EmptyFilter({
     this.group,
     this.personName,
-    this.unnamed = false,
     required this.scannedCount,
     required this.onScan,
   });
 
   final DetectionGroup? group;
   final String? personName;
-  final bool unnamed;
   final int scannedCount;
   final VoidCallback? onScan;
 
@@ -385,9 +375,7 @@ class _EmptyFilter extends StatelessWidget {
     }
     final message = personName != null
         ? 'No photos of $personName yet.'
-        : unnamed
-            ? 'No photos with unnamed faces yet.'
-            : 'No ${group?.label.toLowerCase()} photos yet.';
+        : 'No ${group?.label.toLowerCase()} photos yet.';
     return Center(child: Text(message));
   }
 }
@@ -420,343 +408,3 @@ class _ErrorView extends StatelessWidget {
   }
 }
 
-class _PeopleSelection {
-  const _PeopleSelection({this.name, this.unnamed = false});
-
-  final String? name;
-  final bool unnamed;
-}
-
-/// Lists named people with photo counts, plus an "unnamed people" row.
-/// Tap to filter by a person; edit names/aliases via the row menu, or select
-/// several people and combine them into one.
-class _PeopleSheet extends StatefulWidget {
-  const _PeopleSheet({required this.index});
-
-  final DetectionIndex index;
-
-  @override
-  State<_PeopleSheet> createState() => _PeopleSheetState();
-}
-
-class _PeopleSheetState extends State<_PeopleSheet> {
-  bool _selecting = false;
-  final Set<String> _selected = {};
-
-  @override
-  Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: widget.index,
-      builder: (context, _) {
-        final identities = widget.index.identities;
-        final counts = widget.index.countPeople();
-        final unnamedCount = counts[DetectionIndex.kUnnamedPeople] ?? 0;
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'People',
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: _selecting
-                          ? 'Cancel selection'
-                          : 'Combine people',
-                      icon: Icon(
-                        _selecting ? Icons.close : Icons.merge_type,
-                      ),
-                      onPressed: () => setState(() {
-                        _selecting = !_selecting;
-                        _selected.clear();
-                      }),
-                    ),
-                    if (_selecting)
-                      FilledButton.tonalIcon(
-                        onPressed: _selected.length >= 2 ? _merge : null,
-                        icon: const Icon(Icons.merge),
-                        label: Text('Combine (${_selected.length})'),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Flexible(
-                  child: SingleChildScrollView(
-                    child: Column(
-                      children: [
-                        for (final id in identities)
-                          ListTile(
-                            leading: _selecting
-                                ? Checkbox(
-                                    value: _selected.contains(id.name),
-                                    onChanged: (v) => setState(() {
-                                      if (v == true) {
-                                        _selected.add(id.name);
-                                      } else {
-                                        _selected.remove(id.name);
-                                      }
-                                    }),
-                                  )
-                                : id.linkedToContact
-                                    ? ContactAvatar(
-                                        contact: PhoneContact(
-                                          id: id.contactId!,
-                                          name: id.contactDisplayName ??
-                                              id.name,
-                                          photoUri: id.contactPhotoUri,
-                                        ),
-                                      )
-                                    : CircleAvatar(
-                                        child: Text(
-                                          id.name.isEmpty
-                                              ? '?'
-                                              : id.name[0].toUpperCase(),
-                                        ),
-                                      ),
-                            title: Text(id.name),
-                            subtitle: Text(_subtitle(id, counts)),
-                            onTap: _selecting
-                                ? () => setState(() {
-                                      if (!_selected.add(id.name)) {
-                                        _selected.remove(id.name);
-                                      }
-                                    })
-                                : () => Navigator.pop(
-                                    context,
-                                    _PeopleSelection(name: id.name),
-                                  ),
-                            trailing: _selecting
-                                ? null
-                                : _identityMenu(context, id),
-                          ),
-                        if (!_selecting && unnamedCount > 0)
-                          ListTile(
-                            leading: const CircleAvatar(
-                              child: Icon(Icons.face_outlined, size: 20),
-                            ),
-                            title: const Text('Unnamed people'),
-                            subtitle: Text(
-                              '$unnamedCount '
-                              '${unnamedCount == 1 ? 'photo' : 'photos'}',
-                            ),
-                            onTap: () => Navigator.pop(
-                              context,
-                              const _PeopleSelection(unnamed: true),
-                            ),
-                          ),
-                        if (identities.isEmpty && unnamedCount == 0)
-                          const Padding(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 24,
-                            ),
-                            child: Text(
-                              'No known people yet. Open a photo, tap '
-                              '“People”, and name a face to start filtering.',
-                            ),
-                          ),
-                        if (_selecting)
-                          const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 8),
-                            child: Text(
-                              'Select the people that are actually the same '
-                              'person, then tap Combine.',
-                              style: TextStyle(fontSize: 12),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  String _subtitle(PersonIdentity id, Map<String, int> counts) {
-    final n = counts[id.name] ?? 0;
-    final photos = '$n ${n == 1 ? 'photo' : 'photos'}';
-    final contact =
-        id.linkedToContact ? ' · ${id.contactDisplayName ?? 'contact'}' : '';
-    final alias = id.aliases.isEmpty ? '' : ' · also ${id.aliases.join(', ')}';
-    return '$photos$alias$contact';
-  }
-
-  Future<void> _merge() async {
-    final all = widget.index.identities;
-    final people = all.where((i) => _selected.contains(i.name)).toList();
-    if (people.length < 2 || !mounted) return;
-    final preview = mergePeople(people);
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Combine into one person?'),
-        content: Text(
-          '${preview.name} will be the name, and ${preview.aliases.join(', ')} '
-          'will be kept as other names. Every photo of them is grouped '
-          'together.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Combine'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    await widget.index.mergeIdentities(people);
-    if (!mounted) return;
-    setState(() {
-      _selecting = false;
-      _selected.clear();
-    });
-  }
-
-  Widget _identityMenu(BuildContext context, PersonIdentity id) {
-    return PopupMenuButton<String>(
-      onSelected: (action) async {
-        switch (action) {
-          case 'edit':
-            await _editIdentity(id);
-          case 'link':
-            await _linkContact(id);
-          case 'unlink':
-            await widget.index.unlinkContact(id.name);
-            if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Unlinked ${id.name} from contacts')),
-            );
-          case 'delete':
-            final ok = await showDialog<bool>(
-              context: context,
-              builder: (dialogContext) => AlertDialog(
-                title: Text('Remove ${id.name}?'),
-                content: const Text(
-                  'Their name will be cleared from matching faces. Faces '
-                  'stay indexed and can be named again.',
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(dialogContext, false),
-                    child: const Text('Cancel'),
-                  ),
-                  FilledButton(
-                    onPressed: () => Navigator.pop(dialogContext, true),
-                    child: const Text('Remove'),
-                  ),
-                ],
-              ),
-            );
-            if (ok == true) await widget.index.removeIdentity(id.name);
-        }
-      },
-      itemBuilder: (context) => [
-        const PopupMenuItem(value: 'edit', child: Text('Edit names')),
-        id.linkedToContact
-            ? const PopupMenuItem(
-                value: 'unlink',
-                child: Text('Unlink from contact'),
-              )
-            : const PopupMenuItem(
-                value: 'link',
-                child: Text('Link a contact…'),
-              ),
-        const PopupMenuItem(value: 'delete', child: Text('Delete')),
-      ],
-    );
-  }
-
-  Future<void> _linkContact(PersonIdentity id) async {
-    final contact = await ContactPicker.pick(context);
-    if (contact == null || !mounted) return;
-    await widget.index.linkContact(
-      forName: id.name,
-      contactId: contact.id,
-      contactDisplayName: contact.name,
-    );
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('${id.name} linked to ${contact.name}'),
-      ),
-    );
-  }
-
-  Future<void> _editIdentity(PersonIdentity id) async {
-    final name = TextEditingController(text: id.name);
-    final aliases = TextEditingController(text: id.aliases.join(', '));
-    final result = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text('Edit ${id.name}'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: name,
-              autofocus: true,
-              textCapitalization: TextCapitalization.words,
-              decoration: const InputDecoration(labelText: 'Name'),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: aliases,
-              textCapitalization: TextCapitalization.words,
-              decoration: const InputDecoration(
-                labelText: 'Other names',
-                hintText: 'Comma separated, e.g. Karen, Mom',
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final trimmed = name.text.trim();
-              if (trimmed.isNotEmpty) Navigator.pop(dialogContext, trimmed);
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-    if (result == null || result.trim().isEmpty || !mounted) return;
-    final aliasList = aliases.text
-        .split(',')
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList();
-    final renamed = await widget.index.updateIdentity(
-      oldName: id.name,
-      newName: result,
-      aliases: aliasList,
-    );
-    if (renamed != -1 || !mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'That name already belongs to another person — use Combine instead.',
-        ),
-      ),
-    );
-  }
-}

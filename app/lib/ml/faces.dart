@@ -39,6 +39,7 @@ class DetectedFace {
     required this.embedding,
     this.name,
     this.similarity,
+    this.ignored = false,
   });
 
   factory DetectedFace.fromMap(Map<String, dynamic> map) => DetectedFace(
@@ -53,6 +54,7 @@ class DetectedFace {
         ),
         name: map['name'] as String?,
         similarity: (map['sim'] as num?)?.toDouble(),
+        ignored: map['ign'] as bool? ?? false,
       );
 
   final Rect rect;
@@ -62,6 +64,10 @@ class DetectedFace {
   String? name;
   double? similarity;
 
+  /// True when the user opted this face out of naming entirely; ignored
+  /// faces never count as unnamed and are skipped by auto-matching.
+  bool ignored;
+
   Map<String, dynamic> toMap() => {
         'x': rect.left,
         'y': rect.top,
@@ -70,6 +76,7 @@ class DetectedFace {
         'emb': embedding.toList(),
         'name': name,
         'sim': similarity,
+        if (ignored) 'ign': true,
       };
 }
 
@@ -283,7 +290,9 @@ class FaceRecognitionService {
 }
 
 /// Crops [rect] (normalized, relative to the decoded dimensions of [bytes])
-/// out of the image and returns a small JPEG, for face thumbnails.
+/// out of the image and returns a small JPEG, for face thumbnails. The crop
+/// is padded by [padding] on every side (relative to the face size) so tight
+/// or tiny faces keep some context.
 Uint8List cropFaceJpeg(Uint8List bytes, Rect rect, {int size = 96}) {
   final decoded = img.decodeImage(bytes);
   if (decoded == null) return Uint8List(0);
@@ -295,13 +304,26 @@ Uint8List cropFaceJpeg(Uint8List bytes, Rect rect, {int size = 96}) {
 Uint8List cropFaceJpegFromDecoded(img.Image image, Rect rect, {int size = 96}) =>
     _cropFaceJpegFrom(image, rect, size: size);
 
-Uint8List _cropFaceJpegFrom(img.Image image, Rect rect, {required int size}) {
+Uint8List _cropFaceJpegFrom(
+  img.Image image,
+  Rect rect, {
+  required int size,
+  double padding = 0.35,
+}) {
   final iw = image.width;
   final ih = image.height;
-  final x = (rect.left * iw).round().clamp(0, iw - 1);
-  final y = (rect.top * ih).round().clamp(0, ih - 1);
-  var w = (rect.width * iw).round();
-  var h = (rect.height * ih).round();
+  final pw = rect.width * padding;
+  final ph = rect.height * padding;
+  final padded = Rect.fromLTRB(
+    (rect.left - pw).clamp(0.0, 1.0),
+    (rect.top - ph).clamp(0.0, 1.0),
+    (rect.right + pw).clamp(0.0, 1.0),
+    (rect.bottom + ph).clamp(0.0, 1.0),
+  );
+  final x = (padded.left * iw).round().clamp(0, iw - 1);
+  final y = (padded.top * ih).round().clamp(0, ih - 1);
+  var w = (padded.width * iw).round();
+  var h = (padded.height * ih).round();
   w = w.clamp(1, iw - x);
   h = h.clamp(1, ih - y);
   final cropped = img.copyResize(

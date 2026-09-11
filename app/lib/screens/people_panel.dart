@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 
@@ -143,6 +145,7 @@ class _PeoplePanelState extends State<PeoplePanel> {
                 ),
                 const SizedBox(height: 8),
               ],
+              if (Platform.isAndroid)
               TextButton.icon(
                 onPressed: () => Navigator.pop(dialogContext, kLinkContact),
                 icon: const Icon(Icons.contact_phone, size: 18),
@@ -332,10 +335,15 @@ class _FaceTile extends StatelessWidget {
                 children: [
                   Flexible(
                     child: Text(
-                      face.name ?? 'Name…',
+                      face.ignored
+                          ? 'Ignored'
+                          : face.name ?? 'Name…',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      style: TextStyle(
+                        color: face.ignored ? Colors.white60 : Colors.white,
+                        fontSize: 12,
+                      ),
                     ),
                   ),
                   if (onClear != null)
