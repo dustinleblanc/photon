@@ -4,7 +4,7 @@ release/
 *.tar.gz
 
 # Go binary
-photon
+/photon
 
 # Swift build artifacts
 .build/
