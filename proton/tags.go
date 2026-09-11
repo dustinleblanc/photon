@@ -85,14 +85,26 @@ func DownloadTags(ctx context.Context, drive *Drive) ([]byte, error) {
 }
 
 // UploadTags writes a new revision of the snapshot. The bridge handles name
-// collisions by creating a new revision on the existing file (see
-// handleRevisionConflict), so the file link stays stable across syncs --
-// no upload-then-trash dance, which previously left two same-named files
-// and stale cached links pointing at the trashed copy.
+// collisions with an active file by creating a new revision on the existing
+// file (see handleRevisionConflict), so the file link stays stable across
+// syncs. A draft-state orphan left by a previously failed commit is
+// hard-deleted first: it reserves the name (2500) but its revisions list
+// 404s (2501), wedging the normal path forever.
 func UploadTags(ctx context.Context, drive *Drive, data []byte) error {
 	folder, err := ensureTagsFolder(ctx, drive)
 	if err != nil {
 		return err
+	}
+	draft, err := drive.SearchByNameInActiveFolderByID(
+		ctx, folder.LinkID, TagsFileName, true, false, papi.LinkStateDraft,
+	)
+	if err != nil {
+		return fmt.Errorf("search draft tags file: %w", err)
+	}
+	if draft != nil {
+		if err := drive.DeleteOrphanDraftByID(ctx, draft); err != nil {
+			return fmt.Errorf("delete orphan draft tags file: %w", err)
+		}
 	}
 	reader := newByteReader(data)
 	if _, _, err := drive.UploadFileByReader(
