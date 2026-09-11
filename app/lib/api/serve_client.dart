@@ -90,17 +90,44 @@ class ServeClient {
   }
 
   Future<Uint8List> preview(String linkId, {int size = 512}) async {
-    final req = await _http.getUrl(
-      _uri('/api/v1/assets/$linkId/preview', {'size': '$size'}),
-    );
-    final res = await req.close();
-    return _readBytes(res);
+    return _download(() async {
+      final req = await _http.getUrl(
+        _uri('/api/v1/assets/$linkId/preview', {'size': '$size'}),
+      );
+      final res = await req.close();
+      return _readBytes(res);
+    });
   }
 
   Future<Uint8List> original(String linkId) async {
-    final req = await _http.getUrl(_uri('/api/v1/assets/$linkId/original'));
-    final res = await req.close();
-    return _readBytes(res);
+    return _download(() async {
+      final req = await _http.getUrl(_uri('/api/v1/assets/$linkId/original'));
+      final res = await req.close();
+      return _readBytes(res);
+    });
+  }
+
+  /// Retries byte downloads on transient network failures. The serve streams
+  /// large files (originals) through a tunnel, and a dropped keep-alive
+  /// connection mid-body otherwise surfaces as "connection closed while
+  /// receiving data".
+  Future<Uint8List> _download(
+    Future<Uint8List> Function() attempt, {
+    int attempts = 3,
+  }) async {
+    Object? last;
+    for (var i = 0; i < attempts; i++) {
+      try {
+        return await attempt();
+      } on ApiException {
+        rethrow;
+      } catch (e) {
+        last = e;
+        if (i == attempts - 1) break;
+        await Future<void>.delayed(Duration(milliseconds: 400 * (i + 1)));
+      }
+    }
+    throw last! as Exception;
   }
 
   Uri _uri(String path, [Map<String, String>? query]) {

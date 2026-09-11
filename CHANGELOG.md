@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-11
+
+### Added
+
+- Android app: deeply integrated with the platform — share sheet, "save to
+  gallery" (MediaStore), and a DocumentsProvider that exposes the library to
+  system file pickers (e.g. the Files app) with working search.
+- "Set as wallpaper" from the lightbox: saves the photo then opens the system
+  wallpaper cropper directly via `ACTION_CROP_AND_SET_WALLPAPER`, so the
+  contact-photo picker can no longer steal the intent.
+- Lightbox actions now live in a Material 3 bottom sheet (Set as wallpaper,
+  Save to gallery, Share, Download original) instead of a stacked button bar,
+  and appear as soon as the preview loads (the original is fetched lazily).
+- Request logging on the loopback `serve` API.
+
+### Fixed
+
+- Original downloads failed on Android with "connection closed while receiving
+  data": serve advertised Proton's block-padded encrypted size as
+  Content-Length, which is larger than the actual decrypted bytes. It now
+  streams chunked, and the client retries transient tunnel drops.
+- Photos set as wallpaper appeared rotated 90° because the cropper ignores
+  EXIF orientation; the save path now bakes the EXIF rotation into upright
+  JPEG pixels before writing to MediaStore.
+
 ## [0.2.0] - 2026-09-10
 
 ### Added

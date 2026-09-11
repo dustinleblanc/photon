@@ -62,8 +62,12 @@ func (c *Client) ListPhotos(ctx context.Context, cursor string, pageSize int) ([
 	return photos, nil
 }
 
-// OpenOriginal streams the decrypted original for a photo link. The returned
-// size is the plaintext byte length (for Content-Length).
+// OpenOriginal streams the decrypted original for a photo link.
+//
+// The returned size is NOT the plaintext byte length: go-proton-api reports the
+// block-padded encrypted size, which can be larger than the honestly decrypted
+// content (e.g. ~4.5M for a ~3.9M HEIC). Callers must not advertise it as
+// Content-Length; stream the body and let the length come from the wire.
 func (c *Client) OpenOriginal(ctx context.Context, linkID string) (io.ReadCloser, int64, error) {
 	rc, size, _, err := c.drive.DownloadFileByID(ctx, linkID, 0)
 	if err != nil {
