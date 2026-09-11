@@ -67,6 +67,11 @@ func DownloadTags(ctx context.Context, drive *Drive) ([]byte, error) {
 	if file == nil {
 		return nil, ErrTagsNotFound
 	}
+	// The link cache can hold a stale entry (e.g. a copy that was later
+	// trashed by an older revision of this code), which surfaces as a 2501
+	// "not found" on the revisions call. Evict before reading so we always
+	// fetch fresh link state.
+	drive.InvalidateLink(file.LinkID)
 	rc, _, _, err := drive.DownloadFileByID(ctx, file.LinkID, 0)
 	if err != nil {
 		return nil, fmt.Errorf("download tags: %w", err)
@@ -79,16 +84,13 @@ func DownloadTags(ctx context.Context, drive *Drive) ([]byte, error) {
 	return data, nil
 }
 
-// UploadTags writes a new revision of the snapshot: the new file is uploaded
-// first, then the previous link is trashed, so a failed upload never destroys
-// the existing data. Drive permits same-name files in a folder, which is why
-// the old link is removed explicitly.
+// UploadTags writes a new revision of the snapshot. The bridge handles name
+// collisions by creating a new revision on the existing file (see
+// handleRevisionConflict), so the file link stays stable across syncs --
+// no upload-then-trash dance, which previously left two same-named files
+// and stale cached links pointing at the trashed copy.
 func UploadTags(ctx context.Context, drive *Drive, data []byte) error {
 	folder, err := ensureTagsFolder(ctx, drive)
-	if err != nil {
-		return err
-	}
-	old, err := findTagsFile(ctx, drive, folder.LinkID)
 	if err != nil {
 		return err
 	}
@@ -97,14 +99,6 @@ func UploadTags(ctx context.Context, drive *Drive, data []byte) error {
 		ctx, folder.LinkID, TagsFileName, time.Now(), reader, 0,
 	); err != nil {
 		return fmt.Errorf("upload tags: %w", err)
-	}
-	if old != nil {
-		if err := drive.MoveFileToTrashByID(ctx, old.LinkID); err != nil {
-			// The new revision is already in place; a stale copy lingering
-			// under the same name is confusing but not data loss. Surface it
-			// so the caller can log it.
-			return fmt.Errorf("trash previous tags revision: %w", err)
-		}
 	}
 	return nil
 }
