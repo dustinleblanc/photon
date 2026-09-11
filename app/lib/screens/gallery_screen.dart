@@ -7,7 +7,9 @@ import '../ml/detection.dart';
 import '../ml/detection_index.dart';
 import '../ml/faces.dart';
 import '../ml/library_scanner.dart';
+import '../platform/contacts.dart';
 import '../state/app_state.dart';
+import 'contact_picker.dart';
 import 'lightbox_screen.dart';
 
 class GalleryScreen extends StatefulWidget {
@@ -502,13 +504,22 @@ class _PeopleSheetState extends State<_PeopleSheet> {
                                       }
                                     }),
                                   )
-                                : CircleAvatar(
-                                    child: Text(
-                                      id.name.isEmpty
-                                          ? '?'
-                                          : id.name[0].toUpperCase(),
-                                    ),
-                                  ),
+                                : id.linkedToContact
+                                    ? ContactAvatar(
+                                        contact: PhoneContact(
+                                          id: id.contactId!,
+                                          name: id.contactDisplayName ??
+                                              id.name,
+                                          photoUri: id.contactPhotoUri,
+                                        ),
+                                      )
+                                    : CircleAvatar(
+                                        child: Text(
+                                          id.name.isEmpty
+                                              ? '?'
+                                              : id.name[0].toUpperCase(),
+                                        ),
+                                      ),
                             title: Text(id.name),
                             subtitle: Text(_subtitle(id, counts)),
                             onTap: _selecting
@@ -575,8 +586,10 @@ class _PeopleSheetState extends State<_PeopleSheet> {
   String _subtitle(PersonIdentity id, Map<String, int> counts) {
     final n = counts[id.name] ?? 0;
     final photos = '$n ${n == 1 ? 'photo' : 'photos'}';
-    if (id.aliases.isEmpty) return photos;
-    return '$photos · also ${id.aliases.join(', ')}';
+    final contact =
+        id.linkedToContact ? ' · ${id.contactDisplayName ?? 'contact'}' : '';
+    final alias = id.aliases.isEmpty ? '' : ' · also ${id.aliases.join(', ')}';
+    return '$photos$alias$contact';
   }
 
   Future<void> _merge() async {
@@ -620,6 +633,14 @@ class _PeopleSheetState extends State<_PeopleSheet> {
         switch (action) {
           case 'edit':
             await _editIdentity(id);
+          case 'link':
+            await _linkContact(id);
+          case 'unlink':
+            await widget.index.unlinkContact(id.name);
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Unlinked ${id.name} from contacts')),
+            );
           case 'delete':
             final ok = await showDialog<bool>(
               context: context,
@@ -644,10 +665,35 @@ class _PeopleSheetState extends State<_PeopleSheet> {
             if (ok == true) await widget.index.removeIdentity(id.name);
         }
       },
-      itemBuilder: (context) => const [
-        PopupMenuItem(value: 'edit', child: Text('Edit names')),
-        PopupMenuItem(value: 'delete', child: Text('Delete')),
+      itemBuilder: (context) => [
+        const PopupMenuItem(value: 'edit', child: Text('Edit names')),
+        id.linkedToContact
+            ? const PopupMenuItem(
+                value: 'unlink',
+                child: Text('Unlink from contact'),
+              )
+            : const PopupMenuItem(
+                value: 'link',
+                child: Text('Link a contact…'),
+              ),
+        const PopupMenuItem(value: 'delete', child: Text('Delete')),
       ],
+    );
+  }
+
+  Future<void> _linkContact(PersonIdentity id) async {
+    final contact = await ContactPicker.pick(context);
+    if (contact == null || !mounted) return;
+    await widget.index.linkContact(
+      forName: id.name,
+      contactId: contact.id,
+      contactDisplayName: contact.name,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${id.name} linked to ${contact.name}'),
+      ),
     );
   }
 

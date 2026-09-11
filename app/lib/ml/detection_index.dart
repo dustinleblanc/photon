@@ -197,6 +197,9 @@ class DetectionIndex extends ChangeNotifier {
         aliases: known,
         centroid: centroid,
         faceSamples: n + 1,
+        contactId: prev.contactId,
+        contactDisplayName: prev.contactDisplayName,
+        contactPhotoUri: prev.contactPhotoUri,
       );
     }
     await box.put(name, next.toMap());
@@ -207,13 +210,17 @@ class DetectionIndex extends ChangeNotifier {
   /// Assigns [name] to the face at [faceIndex] of [linkId] and backfills the
   /// name onto every other already-scanned photo whose face matches the
   /// identity. Typed names that belong to an existing identity (canonical or
-  /// alias) resolve to that identity instead of creating a duplicate. Returns
-  /// the number of newly assigned photos (excluding the one named directly),
-  /// or -1 when the face is unavailable.
+  /// alias) resolve to that identity instead of creating a duplicate. When
+  /// [contactId] is given the identity is linked to that device contact.
+  /// Returns the number of newly assigned photos (excluding the one named
+  /// directly), or -1 when the face is unavailable.
   Future<int> nameFace({
     required String linkId,
     required int faceIndex,
     required String name,
+    String? contactId,
+    String? contactDisplayName,
+    String? contactPhotoUri,
   }) async {
     final entry = lookup(linkId);
     if (entry == null || faceIndex < 0 || faceIndex >= entry.faces.length) {
@@ -227,6 +234,14 @@ class DetectionIndex extends ChangeNotifier {
     final canonical = identityForName(trimmed)?.name ?? trimmed;
 
     final identity = await upsertIdentity(canonical, face.embedding);
+    if (contactId != null && contactId.isNotEmpty) {
+      await linkContact(
+        forName: canonical,
+        contactId: contactId,
+        contactDisplayName: contactDisplayName ?? canonical,
+        contactPhotoUri: contactPhotoUri,
+      );
+    }
     entry.faces[faceIndex] = DetectedFace(
       rect: face.rect,
       embedding: face.embedding,
@@ -313,6 +328,9 @@ class DetectionIndex extends ChangeNotifier {
         aliases: aliasSet.toList()..sort(),
         centroid: prev.centroid,
         faceSamples: prev.faceSamples,
+        contactId: prev.contactId,
+        contactDisplayName: prev.contactDisplayName,
+        contactPhotoUri: prev.contactPhotoUri,
       ).toMap(),
     );
     var updated = 0;
@@ -349,6 +367,55 @@ class DetectionIndex extends ChangeNotifier {
     }
     notifyListeners();
     return updated;
+  }
+
+  /// Links an identity to a device contact, storing its id, display name and
+  /// (optional) photo URI on the identity. Resolution is name/alias aware.
+  Future<void> linkContact({
+    required String forName,
+    required String contactId,
+    required String contactDisplayName,
+    String? contactPhotoUri,
+  }) async {
+    final box = _identitiesBox;
+    if (box == null) return;
+    final canonical = identityForName(forName)?.name ?? forName.trim();
+    final raw = box.get(canonical);
+    if (raw == null) return;
+    final prev = PersonIdentity.fromMap(raw.cast<String, dynamic>());
+    await box.put(
+      canonical,
+      PersonIdentity(
+        name: canonical,
+        aliases: prev.aliases,
+        centroid: prev.centroid,
+        faceSamples: prev.faceSamples,
+        contactId: contactId,
+        contactDisplayName: contactDisplayName,
+        contactPhotoUri: contactPhotoUri ?? prev.contactPhotoUri,
+      ).toMap(),
+    );
+    notifyListeners();
+  }
+
+  /// Removes an identity's contact link (the identity itself is kept).
+  Future<void> unlinkContact(String forName) async {
+    final box = _identitiesBox;
+    if (box == null) return;
+    final canonical = identityForName(forName)?.name ?? forName.trim();
+    final raw = box.get(canonical);
+    if (raw == null) return;
+    final prev = PersonIdentity.fromMap(raw.cast<String, dynamic>());
+    await box.put(
+      canonical,
+      PersonIdentity(
+        name: canonical,
+        aliases: prev.aliases,
+        centroid: prev.centroid,
+        faceSamples: prev.faceSamples,
+      ).toMap(),
+    );
+    notifyListeners();
   }
 
   /// Combines several identities into one person: all their names become

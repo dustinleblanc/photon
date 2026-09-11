@@ -12,6 +12,7 @@ import android.media.ExifInterface
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.util.Log
 import androidx.core.app.ActivityCompat
@@ -26,7 +27,9 @@ import java.util.concurrent.Executors
 class MainActivity : FlutterActivity() {
 
     private val GALLERY_CHANNEL = "com.dustinleblanc.photon.library/gallery"
+    private val CONTACTS_CHANNEL = "com.dustinleblanc.photon.library/contacts"
     private val PERMISSION_REQUEST_CODE = 1001
+    private val CONTACTS_PERMISSION_REQUEST_CODE = 1002
     private val ioExecutor = Executors.newSingleThreadExecutor()
 
     private class PendingSave(
@@ -37,6 +40,7 @@ class MainActivity : FlutterActivity() {
     )
 
     private var pendingSave: PendingSave? = null
+    private var pendingContactsAction: ((Boolean) -> Unit)? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -53,6 +57,35 @@ class MainActivity : FlutterActivity() {
                         val bytes = call.argument<ByteArray>("bytes")
                         val filename = call.argument<String>("filename")
                         handleSetAsWallpaper(bytes, filename, result)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CONTACTS_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "search" -> {
+                        val query = call.argument<String>("query") ?: ""
+                        withContactsPermission { granted ->
+                            if (!granted) {
+                                result.error(
+                                    "PERMISSION_DENIED",
+                                    "Contacts permission not granted",
+                                    null,
+                                )
+                            } else {
+                                handleContactsSearch(query, result)
+                            }
+                        }
+                    }
+                    "photo" -> {
+                        val id = call.argument<String>("id") ?: ""
+                        if (id.isEmpty()) {
+                            result.error("INVALID_ARGS", "id required", null)
+                        } else {
+                            handleContactPhoto(id, result)
+                        }
                     }
                     else -> result.notImplemented()
                 }
@@ -107,6 +140,167 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+private fun hasContactsPermission(): Boolean =
+        ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.READ_CONTACTS,
+        ) == PackageManager.PERMISSION_GRANTED
+
+    private fun withContactsPermission(onResult: (Boolean) -> Unit) {
+        if (hasContactsPermission()) {
+            onResult(true)
+            return
+        }
+        pendingContactsAction = onResult
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.READ_CONTACTS),
+            CONTACTS_PERMISSION_REQUEST_CODE,
+        )
+    }
+
+    private fun handleContactsSearch(query: String, result: MethodChannel.Result) {
+        ioExecutor.execute {
+            val outcome = try {
+                Result.success(loadContacts(query))
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+            runOnUiThread {
+                outcome.fold(
+                    onSuccess = { result.success(it) },
+                    onFailure = { e ->
+                        result.error("CONTACTS_FAILED", e.message, null)
+                    },
+                )
+            }
+        }
+    }
+
+    private fun loadContacts(query: String): List<Map<String, Any>> {
+        val resolver = contentResolver
+        val phones = HashMap<String, String>()
+        resolver.query(
+            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            arrayOf(
+                ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+                ContactsContract.CommonDataKinds.Phone.NUMBER,
+            ),
+            null,
+            null,
+            null,
+        )?.use { c ->
+            val idIdx = c.getColumnIndexOrThrow(
+                ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+            )
+            val numIdx = c.getColumnIndexOrThrow(
+                ContactsContract.CommonDataKinds.Phone.NUMBER,
+            )
+            while (c.moveToNext()) {
+                val id = c.getString(idIdx) ?: continue
+                if (!phones.containsKey(id)) phones[id] = c.getString(numIdx) ?: ""
+            }
+        }
+
+        val selection = StringBuilder(
+            "${ContactsContract.Contacts.DISPLAY_NAME} IS NOT NULL " +
+                "AND ${ContactsContract.Contacts.DISPLAY_NAME} != ''",
+        )
+        val args = ArrayList<String>()
+        if (query.isNotBlank()) {
+            selection.append(" AND ${ContactsContract.Contacts.DISPLAY_NAME} LIKE ?")
+            args.add("%${query.trim()}%")
+        }
+
+        val out = ArrayList<Map<String, Any>>()
+        resolver.query(
+            ContactsContract.Contacts.CONTENT_URI,
+            arrayOf(
+                ContactsContract.Contacts._ID,
+                ContactsContract.Contacts.DISPLAY_NAME,
+                ContactsContract.Contacts.PHOTO_THUMBNAIL_URI,
+            ),
+            selection.toString(),
+            args.toTypedArray(),
+            ContactsContract.Contacts.SORT_KEY_PRIMARY,
+        )?.use { c ->
+            val idIdx = c.getColumnIndexOrThrow(ContactsContract.Contacts._ID)
+            val nameIdx = c.getColumnIndexOrThrow(ContactsContract.Contacts.DISPLAY_NAME)
+            val photoIdx = c.getColumnIndexOrThrow(ContactsContract.Contacts.PHOTO_THUMBNAIL_URI)
+            while (c.moveToNext()) {
+                val id = c.getString(idIdx) ?: continue
+                val name = c.getString(nameIdx) ?: continue
+                val m = HashMap<String, Any>()
+                m["id"] = id
+                m["name"] = name
+                val phone = phones[id]
+                if (!phone.isNullOrEmpty()) m["phone"] = phone
+                val photo = c.getString(photoIdx)
+                if (!photo.isNullOrEmpty()) m["photoUri"] = photo
+                out.add(m)
+            }
+        }
+        out.sortBy { (it["name"] as String).lowercase() }
+        return out.take(40)
+    }
+
+    private fun handleContactPhoto(id: String, result: MethodChannel.Result) {
+        ioExecutor.execute {
+            val bytes = try {
+                loadContactPhoto(id)
+            } catch (e: Exception) {
+                null
+            }
+            runOnUiThread { result.success(bytes) }
+        }
+    }
+
+    private fun loadContactPhoto(id: String): ByteArray? {
+        if (id.isBlank()) return null
+        val uri = Uri.withAppendedPath(ContactsContract.Contacts.CONTENT_URI, id)
+        val fileId = contentResolver.query(
+            uri,
+            arrayOf(ContactsContract.Contacts.PHOTO_FILE_ID),
+            null,
+            null,
+            null,
+        )?.use { c ->
+            if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null
+        }
+        var bytes = if (fileId != null) {
+            try {
+                contentResolver.openInputStream(
+                    android.content.ContentUris.withAppendedId(
+                        ContactsContract.DisplayPhoto.CONTENT_URI,
+                        fileId,
+                    ),
+                )?.use { it.readBytes() }
+            } catch (e: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+        if (bytes != null) return bytes
+        val thumb = contentResolver.query(
+            uri,
+            arrayOf(ContactsContract.Contacts.PHOTO_THUMBNAIL_URI),
+            null,
+            null,
+            null,
+        )?.use { c ->
+            if (c.moveToFirst() && !c.isNull(0)) c.getString(0) else null
+        }
+        if (!thumb.isNullOrEmpty()) {
+            return try {
+                contentResolver.openInputStream(Uri.parse(thumb))?.use { it.readBytes() }
+            } catch (e: Exception) {
+                null
+            }
+        }
+        return null
+    }
+
     private fun hasPermission(): Boolean {
         // On API 29+ inserting our own images into MediaStore needs no
         // permission; only legacy (API < 29) needs WRITE_EXTERNAL_STORAGE.
@@ -131,6 +325,14 @@ class MainActivity : FlutterActivity() {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == CONTACTS_PERMISSION_REQUEST_CODE) {
+            val action = pendingContactsAction
+            pendingContactsAction = null
+            val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+            action?.invoke(granted)
+            return
+        }
         if (requestCode != PERMISSION_REQUEST_CODE) return
 
         val pending = pendingSave

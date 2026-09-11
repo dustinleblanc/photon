@@ -25,8 +25,11 @@ double cosineSimilarity(Float32List a, Float32List b) {
 double faceMatchScore(Float32List a, Float32List b) =>
     fdt.FaceDetector.compareFaces(a, b);
 
-/// Below this score two faces are treated as different people.
-const double kDefaultFaceMatchThreshold = 0.6;
+/// Below this score two faces are treated as different people. The plugin's
+/// guidance calls > 0.6 "very likely same person" and > 0.5 "probably same
+/// person"; we err on the permissive side so named people are picked up even
+/// from varying angles and lighting.
+const double kDefaultFaceMatchThreshold = 0.5;
 
 /// A detected face within a photo, with a [0,1]-normalized bounding box and
 /// the 192-dim embedding used for identity matching. Persisted in the index.
@@ -72,13 +75,18 @@ class DetectedFace {
 
 /// A named person. [name] is the canonical name; [aliases] are other names
 /// the same person goes by. [centroid] is the running mean of the embeddings
-/// of the faces the user has explicitly assigned to this identity.
+/// of the faces the user has explicitly assigned to this identity. When the
+/// person is linked to a device contact, the contact's id and display name
+/// (and photo URI, if any) are stored alongside everything else.
 class PersonIdentity {
   PersonIdentity({
     required this.name,
     this.aliases = const [],
     required this.centroid,
     required this.faceSamples,
+    this.contactId,
+    this.contactDisplayName,
+    this.contactPhotoUri,
   });
 
   factory PersonIdentity.fromMap(Map<String, dynamic> map) => PersonIdentity(
@@ -93,21 +101,32 @@ class PersonIdentity {
               .toList(),
         ),
         faceSamples: map['samples'] as int,
+        contactId: map['contactId'] as String?,
+        contactDisplayName: map['contactDisplayName'] as String?,
+        contactPhotoUri: map['contactPhotoUri'] as String?,
       );
 
   final String name;
   final List<String> aliases;
   final Float32List centroid;
   final int faceSamples;
+  final String? contactId;
+  final String? contactDisplayName;
+  final String? contactPhotoUri;
 
   /// Every name this person is known by, canonical first.
   List<String> get allNames => [name, ...aliases];
+
+  bool get linkedToContact => contactId != null && contactId!.isNotEmpty;
 
   Map<String, dynamic> toMap() => {
         'name': name,
         'aliases': aliases,
         'centroid': centroid.toList(),
         'samples': faceSamples,
+        'contactId': contactId,
+        'contactDisplayName': contactDisplayName,
+        'contactPhotoUri': contactPhotoUri,
       };
 }
 
@@ -144,11 +163,16 @@ PersonIdentity mergePeople(
   final aliases =
       names.where((e) => e.toLowerCase() != primaryName.toLowerCase()).toList()
         ..sort();
+  // Keep the first person's contact link (if any) across the merge.
+  final src = people.isNotEmpty ? people.first : null;
   return PersonIdentity(
     name: primaryName,
     aliases: aliases,
     centroid: centroid,
     faceSamples: samples,
+    contactId: src?.contactId,
+    contactDisplayName: src?.contactDisplayName,
+    contactPhotoUri: src?.contactPhotoUri,
   );
 }
 

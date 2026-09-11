@@ -3,6 +3,9 @@
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28"/>
+    <!-- Lets users pull a name from their contacts and link it to a tagged
+         person in the library. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS"/>
 
     <application
         android:label="Photon Library"
