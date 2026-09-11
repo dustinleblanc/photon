@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"sync"
@@ -49,7 +50,31 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/assets", s.listAssets)
 	mux.HandleFunc("GET /api/v1/assets/{id}/original", s.original)
 	mux.HandleFunc("GET /api/v1/assets/{id}/preview", s.preview)
-	return mux
+	return logRequests(mux)
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func logRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := &statusRecorder{ResponseWriter: w, status: 200}
+		next.ServeHTTP(rec, r)
+		slog.Info("http",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"query", r.URL.RawQuery,
+			"remote", r.RemoteAddr,
+			"status", rec.status,
+		)
+	})
 }
 
 // Serve blocks, serving on addr (default "127.0.0.1:8787").
