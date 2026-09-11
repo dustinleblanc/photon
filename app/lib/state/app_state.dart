@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
 import '../api/models.dart';
 import '../api/serve_client.dart';
+import '../ml/detection_index.dart';
+import '../ml/library_scanner.dart';
 import '../sidecar/sidecar.dart';
 
 enum AppPhase { booting, loggedOut, ready }
@@ -11,10 +14,21 @@ enum AppPhase { booting, loggedOut, ready }
 class AppState extends ChangeNotifier {
   AppState({ServeClient? client, Sidecar? sidecar})
       : _client = client ?? ServeClient(),
-        _sidecar = sidecar ?? Sidecar();
+        _sidecar = sidecar ?? Sidecar() {
+    detector = LibraryScanner(
+      detectionIndex,
+      (String linkId, {int size = 512}) => preview(linkId, size: size),
+    );
+  }
 
   final ServeClient _client;
   final Sidecar _sidecar;
+
+  /// On-device, encrypted-at-rest detection index. Android only.
+  final DetectionIndex detectionIndex = DetectionIndex();
+
+  /// Batch object-detection job over the loaded library.
+  late final LibraryScanner detector;
 
   AppPhase _phase = AppPhase.booting;
   AppPhase get phase => _phase;
@@ -67,6 +81,9 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     if (_phase == AppPhase.ready) {
       await loadMore();
+      if (Platform.isAndroid) {
+        unawaited(detectionIndex.init());
+      }
     }
   }
 
@@ -218,6 +235,8 @@ class AppState extends ChangeNotifier {
   void dispose() {
     _sidecar.stop();
     _client.close();
+    detector.dispose();
+    detectionIndex.dispose();
     super.dispose();
   }
 }
