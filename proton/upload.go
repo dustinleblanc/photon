@@ -180,30 +180,14 @@ func Resume(ctx context.Context, saved Session, onRotate func(Session)) (*Drive,
 	return drive, holder, nil
 }
 
-// NewFilesDrive opens the account's regular Drive (not the Photos share) for
-// the same session. The Photos share rejects non-photo content (422), so
-// app-owned files like the people-tags snapshot live in the regular Drive
-// instead. Token rotations feed the same SessionHolder as the Photos drive.
-func NewFilesDrive(ctx context.Context, saved Session, holder *SessionHolder) (*Drive, error) {
-	if saved.SaltedKeyPass == "" || saved.UID == "" || saved.RefreshToken == "" {
-		return nil, fmt.Errorf("stored session is incomplete (missing %s) -- sign in again to replace it", missingSessionFields(saved))
-	}
-
-	config := common.NewConfigWithDefaultValues()
-	config.AppVersion = appVersion
-	config.UseReusableLogin = true
-	config.ReusableCredential = &common.ReusableCredentialData{
-		UID:           saved.UID,
-		AccessToken:   saved.AccessToken,
-		RefreshToken:  saved.RefreshToken,
-		SaltedKeyPass: saved.SaltedKeyPass,
-	}
-
-	drive, _, err := bridge.NewProtonDrive(ctx, config, holder.AuthHandler(), func() {})
-	if err != nil {
-		return nil, err
-	}
-	return drive, nil
+// FilesDrive derives the account's regular Drive (not the Photos share)
+// from an already-authenticated Photos drive. The Photos share rejects
+// non-photo content (422), so app-owned files like the people-tags snapshot
+// live in the regular Drive instead -- but as a *view* over the same
+// client: a second bridge instance would run a second token manager against
+// Proton's single-use refresh tokens and poison the shared session.
+func FilesDrive(ctx context.Context, photos *Drive) (*Drive, error) {
+	return photos.MainVolumeView(ctx)
 }
 
 func missingSessionFields(s Session) string {
