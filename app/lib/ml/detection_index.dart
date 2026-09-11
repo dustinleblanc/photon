@@ -41,7 +41,7 @@ class DetectionIndex extends ChangeNotifier {
       _box = await Hive.openBox<Map>(_boxName, encryptionCipher: cipher);
       _identitiesBox =
           await Hive.openBox<Map>(_identitiesBoxName, encryptionCipher: cipher);
-      await clearLowConfidenceAssignments();
+      await reconcileAutoAssignedNames();
     } catch (e) {
       _openError = e;
     } finally {
@@ -50,23 +50,27 @@ class DetectionIndex extends ChangeNotifier {
     }
   }
 
-  /// Removes names that were auto-assigned below the current match threshold
-  /// (manual assignments carry similarity 1.0 and are never touched). This
-  /// undoes mistaggings left behind when the threshold used to be looser.
-  /// Idempotent and cheap; runs on every open.
-  Future<void> clearLowConfidenceAssignments() async {
+  /// Re-derives every auto-assigned face name against the current identities
+  /// and the current matching rules (threshold + ambiguity margin), clearing
+  /// names that no longer hold. Manual assignments (similarity 1.0) are
+  /// never touched. This undoes mistaggings left behind by looser rules —
+  /// e.g. a lookalike auto-named during backfill — and runs on every open.
+  /// Idempotent and cheap: a few hundred faces times a handful of identities.
+  Future<void> reconcileAutoAssignedNames() async {
     final box = _box;
     if (box == null) return;
+    final ids = identities;
     var changed = false;
     for (final key in box.keys) {
       final entry = lookup(key as String);
       if (entry == null) continue;
-      final needsFix = entry.faces.any(
-        (f) => f.name != null &&
-            f.similarity != null &&
-            f.similarity! < kDefaultFaceMatchThreshold,
+      final needsCheck = entry.faces.any(
+        (f) =>
+            f.name != null &&
+            !f.ignored &&
+            (f.similarity == null || f.similarity! < 1.0),
       );
-      if (!needsFix) continue;
+      if (!needsCheck) continue;
       await box.put(
         entry.linkId,
         DetectedEntry(
@@ -76,19 +80,28 @@ class DetectionIndex extends ChangeNotifier {
           objects: entry.objects,
           faces: [
             for (final f in entry.faces)
-              f.name != null &&
-                      f.similarity != null &&
-                      f.similarity! < kDefaultFaceMatchThreshold
-                  ? DetectedFace(
-                      rect: f.rect,
-                      embedding: f.embedding,
-                      ignored: f.ignored,
-                    )
-                  : f,
+              if (f.name != null &&
+                  !f.ignored &&
+                  (f.similarity == null || f.similarity! < 1.0))
+                () {
+                  final resolved = ids.isEmpty
+                      ? null
+                      : matchIdentity(f.embedding, identities: ids);
+                  if (resolved == f.name) {
+                    return f;
+                  }
+                  changed = true;
+                  return DetectedFace(
+                    rect: f.rect,
+                    embedding: f.embedding,
+                    ignored: f.ignored,
+                  );
+                }()
+              else
+                f,
           ],
         ).toMap(),
       );
-      changed = true;
     }
     if (changed) notifyListeners();
   }
@@ -148,13 +161,16 @@ class DetectionIndex extends ChangeNotifier {
     };
   }
 
-  /// For every named identity, the largest stored face across the library —
-  /// the best thumbnail source — keyed by identity name. Pure lookup over the
-  /// detection box; callers fetch and crop the photo themselves.
+  /// For every named identity, the best stored face across the library for a
+  /// thumbnail — keyed by identity name. Faces the user confirmed manually
+  /// (similarity 1.0) always win; among auto-assigned faces, higher
+  /// similarity wins, with area as the tiebreaker, so a large but
+  /// low-confidence mis-tag never becomes someone's portrait. Pure lookup
+  /// over the detection box; callers fetch and crop the photo themselves.
   Map<String, ({String linkId, Rect rect})> bestFaces() {
     final box = _box;
     if (box == null) return const {};
-    final best = <String, ({String linkId, Rect rect, double area})>{};
+    final best = <String, ({String linkId, Rect rect, double area, double sim})>{};
     for (final key in box.keys) {
       final entry = lookup(key as String);
       if (entry == null) continue;
@@ -162,9 +178,13 @@ class DetectionIndex extends ChangeNotifier {
         final name = f.name;
         if (name == null) continue;
         final area = f.rect.width * f.rect.height;
+        final sim = f.similarity ?? 0.0;
         final cur = best[name];
-        if (cur == null || area > cur.area) {
-          best[name] = (linkId: key, rect: f.rect, area: area);
+        final better = cur == null ||
+            sim > cur.sim + 0.001 ||
+            (sim > cur.sim - 0.001 && area > cur.area);
+        if (better) {
+          best[name] = (linkId: key, rect: f.rect, area: area, sim: sim);
         }
       }
     }
@@ -339,7 +359,7 @@ class DetectionIndex extends ChangeNotifier {
     if (trimmed.isEmpty) return -1;
     final canonical = identityForName(trimmed)?.name ?? trimmed;
 
-    final identity = await upsertIdentity(canonical, face.embedding);
+    await upsertIdentity(canonical, face.embedding);
     if (contactId != null && contactId.isNotEmpty) {
       await linkContact(
         forName: canonical,
@@ -359,6 +379,7 @@ class DetectionIndex extends ChangeNotifier {
     var matched = 0;
     final box = _box;
     if (box != null) {
+      final known = identities;
       var i = 0;
       for (final key in box.keys) {
         i++;
@@ -367,17 +388,20 @@ class DetectionIndex extends ChangeNotifier {
         var changed = false;
         for (var j = 0; j < other.faces.length; j++) {
           final f = other.faces[j];
-          if (f.name != null) continue;
-          final score = faceMatchScore(f.embedding, identity.centroid);
-          if (score >= kDefaultFaceMatchThreshold) {
-            other.faces[j] = DetectedFace(
-              rect: f.rect,
-              embedding: f.embedding,
-              name: canonical,
-              similarity: score,
-            );
-            changed = true;
-          }
+          if (f.name != null || f.ignored) continue;
+          final name = matchIdentity(f.embedding, identities: known);
+          if (name == null) continue;
+          final score = faceMatchScore(
+            f.embedding,
+            known.firstWhere((id) => id.name == name).centroid,
+          );
+          other.faces[j] = DetectedFace(
+            rect: f.rect,
+            embedding: f.embedding,
+            name: name,
+            similarity: score,
+          );
+          changed = true;
         }
         if (changed) {
           matched++;

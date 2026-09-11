@@ -157,11 +157,80 @@ void main() {
     loose.faces[0].similarity = 0.55;
     await index.put(loose);
 
-    await index.clearLowConfidenceAssignments();
+    await index.reconcileAutoAssignedNames();
 
     expect(index.facesFor('photo-manual').single.name, 'Mom');
     expect(index.facesFor('photo-loose').single.name, isNull);
     // The embedding is kept so the face can be re-matched.
     expect(index.facesFor('photo-loose').single.embedding.length, 192);
+  });
+
+  test('reconciliation clears auto-tags that are now ambiguous', () async {
+    // Two orthogonal identities; the face sits equidistant between them —
+    // above threshold for both, but not decisively closer to either.
+    final a = Float32List(192)..[0] = 1;
+    final b = Float32List(192)..[1] = 1;
+    await index.upsertIdentity('A', a);
+    await index.upsertIdentity('B', b);
+    final between = Float32List(192)
+      ..[0] = 0.70710678
+      ..[1] = 0.70710678;
+    final e = entryWithFace('photo-ambiguous', between, name: 'A');
+    e.faces[0].similarity = 0.65;
+    await index.put(e);
+
+    await index.reconcileAutoAssignedNames();
+
+    expect(index.facesFor('photo-ambiguous').single.name, isNull);
+  });
+
+  test('reconciliation keeps auto-tags that still match decisively',
+      () async {
+    final a = Float32List(192)..[0] = 1;
+    final b = Float32List(192)..[1] = 1;
+    await index.upsertIdentity('A', a);
+    await index.upsertIdentity('B', b);
+    // Strongly closer to A than to B.
+    final face = Float32List(192)
+      ..[0] = 0.97
+      ..[1] = 0.24;
+    final e = entryWithFace('photo-clear', face, name: 'A');
+    e.faces[0].similarity = 0.7;
+    await index.put(e);
+
+    await index.reconcileAutoAssignedNames();
+
+    expect(index.facesFor('photo-clear').single.name, 'A');
+  });
+
+  test('bestFaces prefers confirmed faces over large low-confidence ones',
+      () async {
+    // Logan's real (manual, small) face vs a big mis-tagged auto face.
+    final real = entryWithFace(
+      'photo-real',
+      emb(1),
+      name: 'Logan',
+    );
+    real.faces[0].similarity = 1.0;
+    real.faces[0] = DetectedFace(
+      rect: const Rect.fromLTWH(0.44, 0.38, 0.08, 0.06),
+      embedding: real.faces[0].embedding,
+      name: 'Logan',
+      similarity: 1.0,
+    );
+    await index.put(real);
+    final wrong = entryWithFace('photo-wrong', emb(2), name: 'Logan');
+    wrong.faces[0] = DetectedFace(
+      rect: const Rect.fromLTWH(0.1, 0.02, 0.49, 0.41),
+      embedding: wrong.faces[0].embedding,
+      name: 'Logan',
+      similarity: 0.678,
+    );
+    await index.put(wrong);
+
+    final best = index.bestFaces()['Logan'];
+
+    expect(best, isNotNull);
+    expect(best!.linkId, 'photo-real');
   });
 }

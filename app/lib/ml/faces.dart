@@ -31,6 +31,12 @@ double faceMatchScore(Float32List a, Float32List b) =>
 /// members — so automatic matching only runs at 0.6 and up.
 const double kDefaultFaceMatchThreshold = 0.6;
 
+/// How much better the best identity match must be than the runner-up for an
+/// automatic assignment. Lookalikes (siblings, kids) routinely clear the
+/// absolute threshold for more than one person; requiring a margin keeps
+/// ambiguous faces unnamed instead of confidently wrong.
+const double kFaceMatchMargin = 0.05;
+
 /// A detected face within a photo, with a [0,1]-normalized bounding box and
 /// the 192-dim embedding used for identity matching. Persisted in the index.
 class DetectedFace {
@@ -184,7 +190,8 @@ PersonIdentity mergePeople(
 }
 
 /// Returns the best-matching identity for [embedding], or null when nothing
-/// is above the threshold. Ties prefer the higher score; a higher
+/// is above the threshold — or when the top two candidates are too close to
+/// call (see [kFaceMatchMargin]). Ties prefer the higher score; a higher
 /// [threshold] makes matching stricter.
 String? matchIdentity(
   Float32List embedding, {
@@ -193,13 +200,21 @@ String? matchIdentity(
 }) {
   String? bestName;
   var bestScore = threshold;
+  var runnerUp = -1.0;
   for (final id in identities) {
     final score = faceMatchScore(embedding, id.centroid);
-    if (score >= bestScore) {
+    if (score > bestScore) {
+      runnerUp = bestScore > runnerUp && bestName != null
+          ? bestScore
+          : runnerUp;
       bestScore = score;
       bestName = id.name;
+    } else if (score > runnerUp) {
+      runnerUp = score;
     }
   }
+  if (bestName == null) return null;
+  if (bestScore - runnerUp < kFaceMatchMargin) return null;
   return bestName;
 }
 
