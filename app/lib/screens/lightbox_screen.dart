@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 
 import '../state/app_state.dart';
 
@@ -38,15 +38,20 @@ class _LightboxScreenState extends State<LightboxScreen> {
   @override
   Widget build(BuildContext context) {
     final count = widget.state.photos.length;
-    return Scaffold(
-      backgroundColor: Colors.black,
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.black45,
-        foregroundColor: Colors.white,
-        title: Text('${_index + 1} / $count'),
+    return CupertinoPageScaffold(
+      backgroundColor: CupertinoColors.black,
+      navigationBar: CupertinoNavigationBar(
+        backgroundColor: const Color(0x66000000),
+        border: null,
+        leading: CupertinoNavigationBarBackButton(
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        middle: Text(
+          '${_index + 1} / $count',
+          style: const TextStyle(color: CupertinoColors.white),
+        ),
       ),
-      body: PageView.builder(
+      child: PageView.builder(
         controller: _controller,
         itemCount: count,
         onPageChanged: (i) => setState(() => _index = i),
@@ -81,13 +86,25 @@ class _LightboxPageState extends State<_LightboxPage> {
       setState(() => _original = bytes);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to load original: $e')));
+      await showCupertinoDialog<void>(
+        context: context,
+        builder: (context) => CupertinoAlertDialog(
+          title: const Text('Failed to load original'),
+          content: Text('$e'),
+          actions: [
+            CupertinoDialogAction(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
     } finally {
       if (mounted) setState(() => _loadingOriginal = false);
     }
   }
+
+  final Color _white70 = const Color(0xB3FFFFFF);
 
   @override
   Widget build(BuildContext context) {
@@ -107,22 +124,24 @@ class _LightboxPageState extends State<_LightboxPage> {
                         child: Image.memory(
                           snapshot.data!,
                           fit: BoxFit.contain,
-errorBuilder: (_, _, _) =>
-                            const Center(child: Text('Preview unavailable')),
+                          errorBuilder: (_, _, _) => Center(
+                            child: Text(
+                              'Preview unavailable',
+                              style: TextStyle(color: _white70),
+                            ),
+                          ),
                         ),
                       );
                     }
                     if (snapshot.hasError) {
-                      return const Center(
+                      return Center(
                         child: Text(
                           'Could not load preview',
-                          style: TextStyle(color: Colors.white70),
+                          style: TextStyle(color: _white70),
                         ),
                       );
                     }
-                    return const Center(
-                      child: CircularProgressIndicator(),
-                    );
+                    return const Center(child: CupertinoActivityIndicator());
                   },
                 ),
         ),
@@ -131,16 +150,11 @@ errorBuilder: (_, _, _) =>
           left: 0,
           right: 0,
           child: Center(
-            child: FilledButton.icon(
+            child: CupertinoButton.filled(
               onPressed: _loadingOriginal ? null : _loadOriginal,
-              icon: _loadingOriginal
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.download),
-              label: Text(_original != null ? 'Original loaded' : 'Load original'),
+              child: _loadingOriginal
+                  ? const CupertinoActivityIndicator()
+                  : Text(_original != null ? 'Original loaded' : 'Load original'),
             ),
           ),
         ),

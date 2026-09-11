@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 
 import 'screens/gallery_screen.dart';
 import 'screens/login_screen.dart';
@@ -22,21 +22,18 @@ class PhotonLibraryApp extends StatelessWidget {
       builder: (context, _) {
         final Widget home = switch (state.phase) {
           AppPhase.booting =>
-            const Scaffold(body: Center(child: CircularProgressIndicator())),
+            const CupertinoPageScaffold(
+              child: Center(child: CupertinoActivityIndicator()),
+            ),
           AppPhase.loggedOut => LoginScreen(state: state),
           AppPhase.ready => GalleryScreen(state: state),
         };
-        return MaterialApp(
+        return CupertinoApp(
           title: 'Photon Library',
           debugShowCheckedModeBanner: false,
-          theme: ThemeData(
-            colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF6D4AFF)),
-          ),
-          darkTheme: ThemeData(
-            colorScheme: ColorScheme.fromSeed(
-              seedColor: const Color(0xFF6D4AFF),
-              brightness: Brightness.dark,
-            ),
+          theme: const CupertinoThemeData(
+            primaryColor: Color(0xFF6D4AFF),
+            brightness: Brightness.light,
           ),
           home: home,
         );
