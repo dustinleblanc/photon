@@ -84,7 +84,7 @@ type loginRequest struct {
 }
 
 type loginResponse struct {
-	Status    string   `json:"status"` // "ok" | "hv_required"
+	Status    string   `json:"status"` // "ok" | "hv_required" | "totp_required"
 	HVToken   string   `json:"hvToken,omitempty"`
 	HVMethods []string `json:"hvMethods,omitempty"`
 }
@@ -99,16 +99,21 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	client, session, err := Login(r.Context(), req.Username, req.Password, req.Totp, req.HVToken, req.HVMethod)
 	if err != nil {
 		var hv *proton.HVRequiredError
-		if errors.As(err, &hv) {
+		switch {
+		case errors.As(err, &hv):
 			writeJSON(w, http.StatusOK, loginResponse{
 				Status:    "hv_required",
 				HVToken:   hv.Challenge.Token,
 				HVMethods: hv.Challenge.Methods,
 			})
 			return
+		case errors.Is(err, proton.ErrTotpRequired):
+			writeJSON(w, http.StatusOK, loginResponse{Status: "totp_required"})
+			return
+		default:
+			writeError(w, http.StatusUnauthorized, err.Error())
+			return
 		}
-		writeError(w, http.StatusUnauthorized, err.Error())
-		return
 	}
 
 	s.mu.Lock()

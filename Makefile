@@ -15,6 +15,7 @@ endif
 APP_DIR   := app
 PHOTON    := build/photon
 PKGS      := ./...
+JAVA_HOME ?= /opt/homebrew/opt/openjdk@17
 
 .DEFAULT_GOAL := help
 
@@ -54,6 +55,21 @@ build-flutter: build ## Build the Flutter macOS app (debug)
 build-release: build ## Build the Flutter macOS app (release)
 	cd $(APP_DIR) && flutter build macos --release
 
+.PHONY: build-apk
+build-apk: ## Build the Flutter Android debug APK
+	cd $(APP_DIR) && JAVA_HOME=$(JAVA_HOME) flutter build apk --debug
+
+.PHONY: run-android
+run-android: ## Run the Flutter app on a connected Android device (needs adb reverse)
+	cd $(APP_DIR) && JAVA_HOME=$(JAVA_HOME) flutter run -d android
+
+.PHONY: reverse
+reverse: ## Forward device tcp:8787 to a local photon serve
+	@mkdir -p $(HOME)/Library/Android/sdk/platform-tools 2>/dev/null; \
+	ADB=$$(command -v adb 2>/dev/null || echo $(HOME)/Library/Android/sdk/platform-tools/adb); \
+	$$ADB reverse tcp:8787 tcp:8787
+	@echo "photon serve must be running on 127.0.0.1:8787 (make run-serve)"
+
 .PHONY: app-bundle
 app-bundle: ## Assemble the full PhotonMigrate.app bundle (menubar migration app)
 	./build-app.sh
@@ -82,6 +98,13 @@ analyze: vet ## Alias for vet+analyze
 .PHONY: run
 run: build ## Run the Flutter macOS app in debug mode
 	cd $(APP_DIR) && flutter run -d macos
+
+.PHONY: run-serve
+run-serve: build ## Run photon serve on the host (for adb reverse / remote dev)
+	./$(PHOTON) serve --addr 127.0.0.1:8787
+
+.PHONY: build-all
+build-all: build build-swift build-flutter build-apk ## Build every artifact
 
 # ---------------------------------------------------------------------------
 # Clean

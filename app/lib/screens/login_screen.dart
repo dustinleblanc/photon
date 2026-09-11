@@ -15,6 +15,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _username = TextEditingController();
   final _password = TextEditingController();
   final _totp = TextEditingController();
+  final _totpFocus = FocusNode();
   bool _busy = false;
 
   @override
@@ -22,17 +23,24 @@ class _LoginScreenState extends State<LoginScreen> {
     _username.dispose();
     _password.dispose();
     _totp.dispose();
+    _totpFocus.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
     setState(() => _busy = true);
+    final requireTotp = widget.state.totpRequired;
     await widget.state.login(
       username: _username.text.trim(),
       password: _password.text,
-      totp: _totp.text.trim().isEmpty ? null : _totp.text.trim(),
+      totp: requireTotp ? _totp.text.trim() : null,
     );
-    if (mounted) setState(() => _busy = false);
+    if (mounted) {
+      setState(() => _busy = false);
+      if (widget.state.totpRequired && !requireTotp) {
+        _totpFocus.requestFocus();
+      }
+    }
   }
 
   @override
@@ -67,35 +75,83 @@ class _LoginScreenState extends State<LoginScreen> {
                   _ErrorBanner(message: widget.state.error!),
                   const SizedBox(height: 12),
                 ],
-                CupertinoTextField(
-                  controller: _username,
-                  placeholder: 'Proton username',
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  autocorrect: false,
-                  enableSuggestions: false,
-                ),
+                if (widget.state.totpRequired) ...[
+                  Text(
+                    'Almost there',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.textStyle.copyWith(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _username.text.trim(),
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.textStyle.copyWith(
+                      fontSize: 13,
+                      color: theme.textTheme.textStyle.color?.withValues(
+                        alpha: 0.6,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ] else
+                  AutofillGroup(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        CupertinoTextField(
+                          controller: _username,
+                          placeholder: 'Proton username',
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          autofillHints: const [AutofillHints.username],
+                          textInputAction: TextInputAction.next,
+                          enabled: !_busy,
+                        ),
+                        const SizedBox(height: 10),
+                        CupertinoTextField(
+                          controller: _password,
+                          placeholder: 'Password',
+                          obscureText: true,
+                          autofillHints: const [AutofillHints.password],
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          textInputAction: TextInputAction.go,
+                          onSubmitted: (_) => _submit(),
+                          enabled: !_busy,
+                        ),
+                      ],
+                    ),
+                  ),
                 const SizedBox(height: 10),
-                CupertinoTextField(
-                  controller: _password,
-                  placeholder: 'Password',
-                  obscureText: true,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  onSubmitted: (_) => _submit(),
-                ),
-                const SizedBox(height: 10),
-                CupertinoTextField(
-                  controller: _totp,
-                  placeholder: 'Two-factor code (optional)',
-                  keyboardType: TextInputType.number,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  onSubmitted: (_) => _submit(),
-                ),
+                if (widget.state.totpRequired)
+                  CupertinoTextField(
+                    controller: _totp,
+                    focusNode: _totpFocus,
+                    placeholder: '6-digit code from your authenticator app',
+                    keyboardType: TextInputType.number,
+                    autofillHints: const [AutofillHints.oneTimeCode],
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    onSubmitted: (_) => _submit(),
+                    enabled: !_busy,
+                  ),
                 const SizedBox(height: 20),
                 CupertinoButton.filled(
                   onPressed: _busy ? null : _submit,
                   child: _busy
                       ? const CupertinoActivityIndicator()
-                      : const Text('Sign in'),
+                      : Text(widget.state.totpRequired ? 'Verify' : 'Sign in'),
                 ),
                 const SizedBox(height: 12),
                 Text(

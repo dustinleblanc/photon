@@ -51,10 +51,15 @@ class SessionStatus {
   }
 }
 
-enum LoginOutcome { ok, hvRequired, error }
+enum LoginOutcome { ok, hvRequired, totpRequired, error }
 
 class LoginResult {
-  const LoginResult({required this.outcome, this.hvToken, this.hvMethods, this.error});
+  const LoginResult({
+    required this.outcome,
+    this.hvToken,
+    this.hvMethods,
+    this.error,
+  });
 
   final LoginOutcome outcome;
   final String? hvToken;
@@ -67,6 +72,7 @@ class LoginResult {
       outcome: switch (status) {
         'ok' => LoginOutcome.ok,
         'hv_required' => LoginOutcome.hvRequired,
+        'totp_required' => LoginOutcome.totpRequired,
         _ => LoginOutcome.error,
       },
       hvToken: json['hvToken'] as String?,

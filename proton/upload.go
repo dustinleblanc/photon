@@ -17,6 +17,10 @@ import (
 // this module don't need to import the bridge's common package directly.
 type HVRequiredError = common.HVRequiredError
 
+// ErrTotpRequired re-exports the bridge's "2FA code needed" signal, which
+// Login returns when the account has TOTP enabled but no code was supplied.
+var ErrTotpRequired = common.Err2FACodeRequired
+
 // ErrNoThumbnail re-exports the bridge's "no preview of this type" signal,
 // which FetchPreview uses to fall back across thumbnail tiers.
 var ErrNoThumbnail = bridge.ErrNoThumbnail

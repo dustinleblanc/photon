@@ -34,6 +34,19 @@ class Sidecar {
     String? sessionJson,
     required String sessionOutPath,
   }) async {
+    if (Platform.isAndroid) {
+      // No local sidecar on Android: run `photon serve` on the host and
+      // expose it via `adb reverse tcp:8787 tcp:8787`.
+      final healthy = await _probe();
+      if (!healthy) {
+        throw ApiException(
+          'No photon server reachable. Run `photon serve` on your Mac, then '
+          'forward it: adb reverse tcp:8787 tcp:8787',
+        );
+      }
+      return true;
+    }
+
     if (await _probe()) return true;
 
     final binary = _findBinary();
