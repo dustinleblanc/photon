@@ -59,6 +59,14 @@ build-flutter: build ## Build the Flutter macOS app (debug)
 build-release: build ## Build the Flutter macOS app (release)
 	cd $(APP_DIR) && flutter build macos --release
 
+.PHONY: build-linux
+build-linux: build ## Build the Flutter Linux desktop app (release)
+	cd $(APP_DIR) && flutter build linux --release
+
+.PHONY: run-linux
+run-linux: build ## Run the Flutter Linux desktop app (debug)
+	cd $(APP_DIR) && flutter run -d linux
+
 .PHONY: build-apk
 build-apk: ## Build the Flutter Android debug APK
 	cd $(APP_DIR) && JAVA_HOME=$(JAVA_HOME) flutter build apk --debug
@@ -108,7 +116,7 @@ run-serve: build ## Run photon serve on the host (for adb reverse / remote dev)
 	./$(PHOTON) serve --addr 127.0.0.1:8787
 
 .PHONY: build-all
-build-all: build build-swift build-flutter build-apk ## Build every artifact
+build-all: build build-swift build-flutter build-apk build-linux ## Build every artifact
 
 # ---------------------------------------------------------------------------
 # Clean

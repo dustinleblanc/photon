@@ -67,6 +67,8 @@ Release assets:
 | `PhotonMigrate.app.tar.gz` | Universal (arm64 + x86_64) menu bar app, ad-hoc signed + `SHA256SUMS.txt` |
 | `photon` | Universal standalone CLI binary |
 | `photos-helper` | Universal standalone Photos library reader binary |
+| `photon-linux-x86_64` | Linux (x86_64) standalone CLI binary |
+| `photon-linux-x86_64.tar.gz` | Linux desktop app (Photon Library, incl. `photon` binary) |
 
 The workflow can also be run manually (Actions > release > Run workflow) to
 produce the same artifacts as downloadable workflow artifacts, without
@@ -145,9 +147,11 @@ stderr line. No shared memory, no sockets.
 
 ### Database
 
-`~/Library/Application Support/photon-migrate/photon-migrate.db` (SQLite,
-WAL mode, `0600` permissions). Holds the asset queue and status only.
-Credentials live only in macOS Keychain — never in the database.
+`~/Library/Application Support/photon-migrate/photon-migrate.db` on macOS,
+or `$XDG_DATA_HOME/photon-migrate/photon-migrate.db` (default
+`~/.local/share/photon-migrate/`) on Linux (SQLite, WAL mode, `0600`
+permissions). Holds the asset queue and status only. Credentials live only in
+macOS Keychain — never in the database. Override with `PHOTON_MIGRATE_DB`.
 
 ## Important notes
 

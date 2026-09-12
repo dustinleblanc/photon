@@ -44,9 +44,61 @@ jobs:
           path: build/
           retention-days: 1
 
+  build-linux:
+    name: build (linux x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install Linux desktop build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config \
+            libgtk-3-dev libsecret-1-dev
+
+      - name: Build linux photon binary
+        run: |
+          mkdir -p build
+          GOOS=linux GOARCH=amd64 go build -o build/photon .
+
+      - name: Build Flutter linux app
+        run: cd app && flutter build linux --release
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          BINDIR=app/build/linux/x64/release/bundle
+          cp build/photon "$BINDIR/photon"
+          mkdir -p dist/photon-library build
+          cp -r "$BINDIR"/. dist/photon-library/
+          cp build/photon build/photon-linux-x86_64
+          tar -C dist -czf build/photon-linux-x86_64.tar.gz photon-library
+
+      - name: Upload linux build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-linux
+          path: |
+            build/photon-linux-x86_64
+            build/photon-linux-x86_64.tar.gz
+          retention-days: 1
+
   release:
     name: Assemble universal release
-    needs: build
+    needs: [build, build-linux]
     runs-on: macos-15
     permissions:
       contents: write
@@ -66,6 +118,12 @@ jobs:
           name: build-x86_64
           path: build/x86_64
 
+      - name: Download linux build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-linux
+          path: build/linux
+
       - name: Derive version from tag
         run: |
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
@@ -80,7 +138,9 @@ jobs:
       - name: Compute checksums
         run: |
           cd build/dist
-          shasum -a 256 PhotonMigrate.app.tar.gz photon photos-helper > SHA256SUMS.txt
+          shasum -a 256 PhotonMigrate.app.tar.gz photon photos-helper \
+            ../linux/photon-linux-x86_64 \
+            ../linux/photon-linux-x86_64.tar.gz > SHA256SUMS.txt
 
       - name: Stage release assets
         run: |
@@ -88,6 +148,8 @@ jobs:
           cp build/dist/PhotonMigrate.app.tar.gz release/
           cp build/dist/photon release/
           cp build/dist/photos-helper release/
+          cp build/linux/photon-linux-x86_64 release/
+          cp build/linux/photon-linux-x86_64.tar.gz release/
           cp build/dist/SHA256SUMS.txt release/
 
       - name: Upload assembled distributables (workflow artifacts)
@@ -106,6 +168,8 @@ jobs:
             PhotonMigrate.app.tar.gz
             photon
             photos-helper
+            photon-linux-x86_64
+            photon-linux-x86_64.tar.gz
             SHA256SUMS.txt
           generate_release_notes: true
           fail_on_unmatched_files: true
