@@ -12,6 +12,21 @@ import '../sync/tags_sync.dart';
 
 enum AppPhase { booting, loggedOut, ready }
 
+/// Per-user app data directory: ~/Library/Application Support on macOS (as
+/// before), $XDG_DATA_HOME (default ~/.local/share) on Linux. Returns null on
+/// Android, where results live in the app sandbox instead.
+String? _appDataDir() {
+  if (Platform.isAndroid) return null;
+  if (Platform.isMacOS) {
+    final home = Platform.environment['HOME'] ?? Directory.current.path;
+    return '$home/Library/Application Support/photon-library';
+  }
+  final home = Platform.environment['HOME'] ?? Directory.current.path;
+  final xdg = Platform.environment['XDG_DATA_HOME'];
+  if (xdg != null && xdg.isNotEmpty) return '$xdg/photon-library';
+  return '$home/.local/share/photon-library';
+}
+
 class AppState extends ChangeNotifier {
   AppState({ServeClient? client, Sidecar? sidecar})
       : _client = client ?? ServeClient(),
@@ -96,10 +111,8 @@ class AppState extends ChangeNotifier {
       _savedSessionJson = null;
       return;
     }
-    final home = Platform.environment['HOME'] ?? Directory.current.path;
-    final dir = Directory(
-      '$home/Library/Application Support/photon-library',
-    );
+    final dirPath = _appDataDir() ?? Directory.current.path;
+    final dir = Directory(dirPath);
     dir.createSync(recursive: true);
     _sessionOutPath = '${dir.path}/session.out.json';
     try {
@@ -213,10 +226,7 @@ class AppState extends ChangeNotifier {
     try {
       final f = File(_sessionOutPath);
       if (f.existsSync()) {
-        final home = Platform.environment['HOME'] ?? Directory.current.path;
-        final dest = File(
-          '$home/Library/Application Support/photon-library/session.json',
-        );
+        final dest = File('${_appDataDir() ?? Directory.current.path}/session.json');
         dest.writeAsStringSync(f.readAsStringSync(), flush: true);
       }
     } catch (_) {}
@@ -225,10 +235,7 @@ class AppState extends ChangeNotifier {
   void _cleanupSessionFiles() {
     if (_sessionOutPath.isEmpty) return;
     try {
-      final home = Platform.environment['HOME'] ?? Directory.current.path;
-      final dir = Directory(
-        '$home/Library/Application Support/photon-library',
-      );
+      final dir = Directory(_appDataDir() ?? Directory.current.path);
       for (final name in ['session.json', 'session.out.json']) {
         final f = File('${dir.path}/$name');
         if (f.existsSync()) f.deleteSync();

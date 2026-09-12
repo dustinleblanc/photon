@@ -129,11 +129,14 @@ class Sidecar {
   }
 
   String? _bundled() {
-    // When packaged, photon lives next to the app executable in Resources.
+    // When packaged, photon lives next to the app executable: in the macOS
+    // bundle's Resources/, or right beside the binary in the Linux bundle.
     try {
       final exe = Platform.resolvedExecutable;
-      final resources = File('$exe/../Resources/photon');
-      if (resources.existsSync()) return resources.path;
+      final photon = Platform.isMacOS
+          ? File('$exe/../Resources/photon')
+          : File('$exe/../photon');
+      if (photon.existsSync()) return photon.path;
     } catch (_) {}
     return null;
   }

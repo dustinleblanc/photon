@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -29,22 +30,42 @@ import (
 	"photon/internal/store"
 )
 
-// dbPath is fixed to a location under the user's Application Support
-// directory rather than a relative "photon-migrate.db" -- a relative path
-// resolves against whatever directory the command happens to be invoked
-// from, which silently splits state across multiple database files if the
-// tool is run from different working directories (exactly what happened
-// during development: CLI runs from go-uploader/ vs the project root ended
-// up with two separate, out-of-sync databases).
+// dbPath is fixed to a well-known per-user location rather than a relative
+// "photon-migrate.db" -- a relative path resolves against whatever directory
+// the command happens to be invoked from, which silently splits state across
+// multiple database files if the tool is run from different working
+// directories (exactly what happened during development: CLI runs from
+// go-uploader/ vs the project root ended up with two separate, out-of-sync
+// databases).
+//
+// On macOS it lives under ~/Library/Application Support (the standard app
+// data directory). On Linux it follows the XDG Base Directory spec instead:
+// $XDG_DATA_HOME, defaulting to ~/.local/share. PHOTON_MIGRATE_DB overrides
+// either one.
 var dbPath = func() string {
 	if override := os.Getenv("PHOTON_MIGRATE_DB"); override != "" {
 		return override
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "photon-migrate.db"
+
+	var dir string
+	switch runtime.GOOS {
+	case "linux":
+		base := os.Getenv("XDG_DATA_HOME")
+		if base == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "photon-migrate.db"
+			}
+			base = filepath.Join(home, ".local", "share")
+		}
+		dir = filepath.Join(base, "photon-migrate")
+	default:
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "photon-migrate.db"
+		}
+		dir = filepath.Join(home, "Library", "Application Support", "photon-migrate")
 	}
-	dir := filepath.Join(home, "Library", "Application Support", "photon-migrate")
 	_ = os.MkdirAll(dir, 0o755)
 	return filepath.Join(dir, "photon-migrate.db")
 }()
