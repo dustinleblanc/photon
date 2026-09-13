@@ -118,7 +118,7 @@ class Sidecar {
     final bundled = _bundled();
     if (bundled != null) return bundled;
 
-    final repoRoot = _repoRoot();
+    final repoRoot = findRepoRoot(Directory.current);
     if (repoRoot != null) {
       final bin = File('$repoRoot/build/photon');
       if (bin.existsSync()) return bin.path;
@@ -132,25 +132,15 @@ class Sidecar {
     // When packaged, photon lives next to the app executable: in the macOS
     // bundle's Resources/, or right beside the binary in the Linux bundle.
     try {
-      final exe = Platform.resolvedExecutable;
+      // Resolve symlinks so a versioned install layout (e.g. a `current`
+      // symlink into versions/<tag>) still finds the photon binary that sits
+      // next to the *real* executable.
+      final exe = File(Platform.resolvedExecutable).resolveSymbolicLinksSync();
       final photon = Platform.isMacOS
           ? File('$exe/../Resources/photon')
           : File('$exe/../photon');
       if (photon.existsSync()) return photon.path;
     } catch (_) {}
-    return null;
-  }
-
-  String? _repoRoot() {
-    final cwd = Directory.current.absolute;
-    Directory? dir = cwd;
-    while (dir != null) {
-      if (File('${dir.path}/go.mod').existsSync() &&
-          Directory('${dir.path}/core').existsSync()) {
-        return dir.path;
-      }
-      dir = dir.parent;
-    }
     return null;
   }
 
@@ -164,4 +154,26 @@ class Sidecar {
     } catch (_) {}
     return null;
   }
+}
+
+/// Walks up from [start] looking for the repository root: a directory that
+/// contains both `go.mod` and a `core/` directory. Returns null when no such
+/// ancestor exists.
+///
+/// Stops at the filesystem root, whose [Directory.parent] is itself — without
+/// this guard the walk would loop forever calling `stat("/go.mod")` when run
+/// outside the repo (e.g. a packaged app launched from the desktop), wedging
+/// the UI isolate before the first frame is presented.
+String? findRepoRoot(Directory start) {
+  Directory? dir = start.absolute;
+  while (dir != null) {
+    if (File('${dir.path}/go.mod').existsSync() &&
+        Directory('${dir.path}/core').existsSync()) {
+      return dir.path;
+    }
+    final parent = dir.parent;
+    if (parent.path == dir.path) break;
+    dir = parent;
+  }
+  return null;
 }
