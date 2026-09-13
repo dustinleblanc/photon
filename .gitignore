@@ -13,6 +13,9 @@ DerivedData/
 # macOS
 .DS_Store
 
+# IDE
+.idea/
+
 # Logs
 *.log
 

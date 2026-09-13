@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-13
+
+### Added
+
+- `make install-linux` / `make uninstall-linux`: installs Photon Library under
+  `$PREFIX/lib/photon/versions/<BUILD_TAG>` with a `current` symlink, a
+  `photon-library.desktop` entry, a hicolor icon, and `photon` on `PATH`.
+  Installs are immutable (a new versioned directory each time), so an app still
+  running from a previous install is never rewritten in place and cannot fault
+  on a truncated mapping (the SIGBUS crash).
+- Linux: the Settings gear is now shown in the gallery, matching Android.
+
+### Fixed
+
+- The installed Linux app failed to launch (process running, no window) when
+  started outside the source tree — e.g. from the desktop launcher, whose
+  working directory is `$HOME` or `/`. `Sidecar`'s repo-root search looped
+  forever at the filesystem root (`Directory('/').parent == '/'`), wedging the
+  UI isolate before the first frame could be presented, so the window was never
+  shown. The walk now stops at the root.
+- Packaged Linux builds now find their bundled `photon` sidecar: the executable
+  path is resolved through symlinks, so the versioned `current` layout still
+  locates the `photon` binary beside the real binary.
+
+## [0.8.0] - 2026-09-12
+
+### Added
+
+- Linux desktop support: `setup-arch.sh` dependency installer, the Flutter GTK
+  runner, XDG-compliant database and session paths, `make build-linux` /
+  `run-linux`, and `photon-linux-x86_64` release assets.
+
 ## [0.7.0] - 2026-09-11
 
 ### Added

@@ -76,7 +76,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
             icon: Icon(scanner.running ? Icons.stop : Icons.psychology),
             onPressed: _toggleScan,
           ),
-          if (Platform.isAndroid)
+          if (Platform.isAndroid || Platform.isLinux)
             IconButton(
               tooltip: 'Settings',
               icon: const Icon(Icons.settings_outlined),
