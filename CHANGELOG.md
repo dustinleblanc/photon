@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-13
+
+### Added
+
+- Encrypted, persistent on-disk preview cache: thumbnails/previews are sealed
+  with the same AES-256 key as the detection index and stored under the OS
+  cache directory (LRU, 512 MiB cap), so browsing and rescans stop re-downloading
+  and re-decrypting the same images from Proton. A missing or corrupt entry just
+  re-fetches; nothing is readable on disk without the key.
+- Host-side diagnostic `app/tool/index_probe.dart` to audit an identity's
+  centroid and the similarity distribution of faces against it.
+
+### Fixed
+
+- AI library scan only ever processed the photos loaded into the gallery
+  (200/page), so large libraries appeared to cap at a couple hundred. The scan
+  now pages through the entire `/assets` feed before starting.
+- Face recognition could stop matching entirely: out-of-range sample counts in
+  a synced identity document were used as merge weights, exploding a centroid to
+  ~1e36 so every face scored as a non-match. Sample counts are now sanitized on
+  read and on sync, merges ignore out-of-range weights and exploded centroids,
+  and on index open the app rebuilds corrupted centroids from the faces you
+  manually named and re-runs matching over unnamed faces.
+- The gallery grid flickered on every scan step and page load: each rebuild
+  handed the preview `FutureBuilder` a brand-new future, resetting tiles to
+  their placeholder. Preview futures are now memoized per tile, and scan-progress
+  updates rebuild only the progress row, not the grid.
+- The rotated Proton session written by the sidecar was only saved after an
+  explicit login, so a resumed session could go stale; it is now persisted on
+  resume as well.
+
 ## [0.8.1] - 2026-09-13
 
 ### Added

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -24,6 +25,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
   final _scroll = ScrollController();
   DetectionGroup? _filter;
   String? _personName;
+  bool _preparingScan = false;
 
   @override
   void initState() {
@@ -43,14 +45,27 @@ class _GalleryScreenState extends State<GalleryScreen> {
     }
   }
 
-  void _toggleScan() {
+  Future<void> _toggleScan() async {
     final scanner = widget.state.detector;
     if (scanner.running) {
       scanner.cancel();
       return;
     }
-    final linkIds = widget.state.photos.map((p) => p.linkId).toList();
-    scanner.start(linkIds);
+    if (_preparingScan) return;
+    // Scan the entire library, not just the pages loaded into the gallery.
+    setState(() => _preparingScan = true);
+    try {
+      final linkIds = await widget.state.libraryLinkIds();
+      if (mounted) scanner.start(linkIds);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not load the photo library: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _preparingScan = false);
+    }
   }
 
   @override
@@ -71,10 +86,19 @@ class _GalleryScreenState extends State<GalleryScreen> {
               )
             : null,
         actions: [
-          IconButton(
-            tooltip: scanner.running ? 'Stop scanning' : 'Scan for objects',
-            icon: Icon(scanner.running ? Icons.stop : Icons.psychology),
-            onPressed: _toggleScan,
+          ListenableBuilder(
+            listenable: scanner,
+            builder: (context, _) => IconButton(
+              tooltip: scanner.running ? 'Stop scanning' : 'Scan for objects',
+              icon: _preparingScan
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(scanner.running ? Icons.stop : Icons.psychology),
+              onPressed: _preparingScan ? null : _toggleScan,
+            ),
           ),
           if (Platform.isAndroid || Platform.isLinux)
             IconButton(
@@ -89,7 +113,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
         ],
       ),
       body: ListenableBuilder(
-        listenable: Listenable.merge([state, index, scanner]),
+        listenable: Listenable.merge([state, index]),
         builder: (context, _) {
           final photos = state.photos;
           if (state.error != null) {
@@ -112,7 +136,14 @@ class _GalleryScreenState extends State<GalleryScreen> {
 
           return Column(
             children: [
-              if (scanner.running) _ScanProgress(scanner: scanner),
+              // Scan progress changes once per processed photo; keep it in its
+              // own listener so it doesn't rebuild the photo grid.
+              ListenableBuilder(
+                listenable: scanner,
+                builder: (context, _) => scanner.running
+                    ? _ScanProgress(scanner: scanner)
+                    : const SizedBox.shrink(),
+              ),
               _FilterBar(
                 selected: _filter,
                 personName: _personName,
@@ -305,7 +336,7 @@ class _FilterBar extends StatelessWidget {
   }
 }
 
-class _PhotoTile extends StatelessWidget {
+class _PhotoTile extends StatefulWidget {
   const _PhotoTile({
     required this.state,
     required this.linkId,
@@ -317,11 +348,34 @@ class _PhotoTile extends StatelessWidget {
   final VoidCallback onTap;
 
   @override
+  State<_PhotoTile> createState() => _PhotoTileState();
+}
+
+class _PhotoTileState extends State<_PhotoTile> {
+  // Memoized so rebuilds (e.g. scan progress) reuse the same future and the
+  // FutureBuilder doesn't reset to its placeholder and flash.
+  late Future<Uint8List> _preview;
+
+  @override
+  void initState() {
+    super.initState();
+    _preview = widget.state.preview(widget.linkId);
+  }
+
+  @override
+  void didUpdateWidget(covariant _PhotoTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.linkId != widget.linkId || oldWidget.state != widget.state) {
+      _preview = widget.state.preview(widget.linkId);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: onTap,
+      onTap: widget.onTap,
       child: FutureBuilder(
-        future: state.preview(linkId),
+        future: _preview,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.done &&
               snapshot.hasData) {
