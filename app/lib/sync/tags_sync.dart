@@ -212,7 +212,7 @@ class TagsIdentity {
               .map((e) => e.toDouble())
               .toList(),
         ),
-        samples: (json['samples'] as num?)?.toInt() ?? 0,
+        samples: sanitizeSamples(json['samples']),
       );
 
   final String name;

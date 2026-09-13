@@ -42,6 +42,10 @@ class DetectionIndex extends ChangeNotifier {
       _identitiesBox =
           await Hive.openBox<Map>(_identitiesBoxName, encryptionCipher: cipher);
       await reconcileAutoAssignedNames();
+      await reconcileIdentities();
+      // Name any unnamed faces that now match (e.g. after a corrupt centroid
+      // was healed above). Idempotent and respects the threshold + margin.
+      await rematchUnnamed();
     } catch (e) {
       _openError = e;
     } finally {
@@ -102,6 +106,100 @@ class DetectionIndex extends ChangeNotifier {
           ],
         ).toMap(),
       );
+    }
+    if (changed) notifyListeners();
+  }
+
+  /// Rebuilds centroids and sample counts that were corrupted. A bad sync
+  /// document supplied out-of-range sample counts; used as merge weights they
+  /// exploded a centroid to ~1e36, after which every face scored as a
+  /// non-match (e.g. Dustin had 0 auto-matches despite dozens of photos).
+  ///
+  /// For an identity with locally, manually named faces (similarity 1.0) whose
+  /// stored centroid is unusable, the centroid is re-derived as the mean of
+  /// those embeddings and the sample count set to their number. Identities
+  /// with no local manual faces are left alone (their centroid may be a valid
+  /// merged result from another device); only an out-of-range sample count is
+  /// reset. Runs on every open; cheap and idempotent.
+  Future<void> reconcileIdentities() async {
+    final idBox = _identitiesBox;
+    if (idBox == null) return;
+
+    final manual = <String, List<Float32List>>{};
+    final box = _box;
+    if (box != null) {
+      for (final key in box.keys) {
+        final entry = lookup(key as String);
+        if (entry == null) continue;
+        for (final f in entry.faces) {
+          final name = f.name;
+          if (name == null || (f.similarity ?? 0) < 1.0) continue;
+          (manual[name] ??= <Float32List>[]).add(f.embedding);
+        }
+      }
+    }
+
+    var changed = false;
+    for (final key in idBox.keys.toList()) {
+      final raw = idBox.get(key);
+      if (raw is! Map) continue;
+      final map = raw.cast<String, dynamic>();
+      final name = map['name'] as String? ?? '$key';
+      final stored = (map['centroid'] as List?) ?? const [];
+      final samplesRaw = map['samples'];
+      final samplesBad =
+          samplesRaw is! int || samplesRaw != sanitizeSamples(samplesRaw);
+
+      final faces = manual[name];
+      final canRebuild =
+          faces != null && faces.isNotEmpty && _centroidUnusable(stored);
+
+      if (canRebuild) {
+        final length = faces.first.length;
+        if (length == 0 || faces.any((f) => f.length != length)) continue;
+        final rebuilt = Float32List(length);
+        for (final f in faces) {
+          for (var i = 0; i < length; i++) {
+            rebuilt[i] += f[i];
+          }
+        }
+        for (var i = 0; i < length; i++) {
+          rebuilt[i] /= faces.length;
+        }
+        await idBox.put(
+          key,
+          PersonIdentity(
+            name: name,
+            aliases: ((map['aliases'] as List?) ?? const [])
+                .cast<String>()
+                .toList(),
+            centroid: rebuilt,
+            faceSamples: faces.length,
+            contactId: map['contactId'] as String?,
+            contactDisplayName: map['contactDisplayName'] as String?,
+            contactPhotoUri: map['contactPhotoUri'] as String?,
+          ).toMap(),
+        );
+        changed = true;
+      } else if (samplesBad) {
+        await idBox.put(
+          key,
+          PersonIdentity(
+            name: name,
+            aliases: ((map['aliases'] as List?) ?? const [])
+                .cast<String>()
+                .toList(),
+            centroid: Float32List.fromList(
+              stored.map((e) => (e as num).toDouble()).toList(),
+            ),
+            faceSamples: sanitizeSamples(samplesRaw),
+            contactId: map['contactId'] as String?,
+            contactDisplayName: map['contactDisplayName'] as String?,
+            contactPhotoUri: map['contactPhotoUri'] as String?,
+          ).toMap(),
+        );
+        changed = true;
+      }
     }
     if (changed) notifyListeners();
   }
@@ -309,7 +407,10 @@ class DetectionIndex extends ChangeNotifier {
       );
     } else {
       final prev = PersonIdentity.fromMap(raw.cast<String, dynamic>());
-      final n = prev.faceSamples;
+      // Clamp the prior count so a corrupt value can't skew the running mean.
+      final n = prev.faceSamples <= 0 || prev.faceSamples > kMaxFaceSamples
+          ? 0
+          : prev.faceSamples;
       final centroid = Float32List(embedding.length);
       for (var i = 0; i < centroid.length; i++) {
         centroid[i] =
@@ -799,4 +900,19 @@ class DetectionIndex extends ChangeNotifier {
     _identitiesBox = null;
     super.dispose();
   }
+}
+
+/// True when a stored centroid is missing, non-numeric, non-finite, or at a
+/// magnitude no real embedding centroid reaches (it is a mean of unit-ish
+/// vectors, so components stay around [-1, 1]).
+bool _centroidUnusable(List<dynamic> stored) {
+  if (stored.isEmpty) return true;
+  var sum = 0.0;
+  for (final v in stored) {
+    if (v is! num) return true;
+    final d = v.toDouble();
+    if (!d.isFinite || d.abs() > 1e3) return true;
+    sum += d * d;
+  }
+  return !sum.isFinite || sum > 1e6;
 }

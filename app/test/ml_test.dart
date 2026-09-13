@@ -221,4 +221,64 @@ void main() {
     expect(merged.name, 'Kim');
     expect(merged.aliases, ['Mom']);
   });
+
+  test('sanitizeSamples rejects out-of-range counts', () {
+    expect(sanitizeSamples(5), 5);
+    expect(sanitizeSamples(0), 0);
+    expect(sanitizeSamples(kMaxFaceSamples), kMaxFaceSamples);
+    expect(sanitizeSamples(25769803776), 0);
+    expect(sanitizeSamples(-792299531789139840), 0);
+    expect(sanitizeSamples(null), 0);
+    expect(sanitizeSamples('nope'), 0);
+  });
+
+  test('PersonIdentity.fromMap resets a corrupt sample count', () {
+    final map = PersonIdentity(
+      name: 'Dustin LeBlanc',
+      centroid: Float32List.fromList([0.1, 0.2]),
+      faceSamples: 7,
+    ).toMap()
+      ..['samples'] = -792299531789139840;
+
+    expect(PersonIdentity.fromMap(map).faceSamples, 0);
+  });
+
+  test('mergePeople treats an out-of-range sample count as one sample', () {
+    final a = PersonIdentity(
+      name: 'Dustin',
+      centroid: Float32List.fromList([1, 0]),
+      faceSamples: -792299531789139840,
+    );
+    final b = PersonIdentity(
+      name: 'D',
+      centroid: Float32List.fromList([0, 1]),
+      faceSamples: 1,
+    );
+
+    final merged = mergePeople([a, b]);
+
+    expect(merged.centroid.every((v) => v.isFinite), isTrue);
+    expect(merged.centroid[0], closeTo(0.5, 1e-6));
+    expect(merged.centroid[1], closeTo(0.5, 1e-6));
+  });
+
+  test('mergePeople refuses to average an exploded centroid', () {
+    final corrupt = PersonIdentity(
+      name: 'Dustin',
+      centroid: Float32List.fromList([1e35, -1e35]),
+      faceSamples: 7,
+    );
+    final ok = PersonIdentity(
+      name: 'D',
+      centroid: Float32List.fromList([1, 0]),
+      faceSamples: 1,
+    );
+
+    final merged = mergePeople([corrupt, ok]);
+
+    // Only the sane identity contributes; the corrupt one is skipped.
+    expect(merged.centroid.every((v) => v.isFinite && v.abs() <= 1), isTrue);
+    expect(merged.centroid[0], closeTo(1.0, 1e-6));
+    expect(merged.centroid[1], closeTo(0.0, 1e-6));
+  });
 }

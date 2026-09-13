@@ -31,6 +31,18 @@ double faceMatchScore(Float32List a, Float32List b) =>
 /// members — so automatic matching only runs at 0.6 and up.
 const double kDefaultFaceMatchThreshold = 0.6;
 
+/// Upper bound on a plausible sample count. Nothing in the app produces more,
+/// but a corrupt sync document did: using those values as merge weights
+/// exploded a centroid to ~1e36, after which every face scored as a
+/// non-match. Counts outside `[0, kMaxFaceSamples]` are treated as 0.
+const int kMaxFaceSamples = 1000000;
+
+/// Clamps a raw stored/synced sample count to a plausible value.
+int sanitizeSamples(Object? raw) {
+  final value = raw is int ? raw : (raw is num ? raw.toInt() : 0);
+  return value < 0 || value > kMaxFaceSamples ? 0 : value;
+}
+
 /// How much better the best identity match must be than the runner-up for an
 /// automatic assignment. Lookalikes (siblings, kids) routinely clear the
 /// absolute threshold for more than one person; requiring a margin keeps
@@ -113,7 +125,7 @@ class PersonIdentity {
               .map((e) => e.toDouble())
               .toList(),
         ),
-        faceSamples: map['samples'] as int,
+        faceSamples: sanitizeSamples(map['samples']),
         contactId: map['contactId'] as String?,
         contactDisplayName: map['contactDisplayName'] as String?,
         contactPhotoUri: map['contactPhotoUri'] as String?,
@@ -156,9 +168,18 @@ PersonIdentity mergePeople(
   var samples = 0;
   final collected = <String>{};
   for (final p in people) {
-    samples += p.faceSamples;
-    for (var i = 0; i < n; i++) {
-      centroid[i] += p.centroid[i] * p.faceSamples;
+    final usableCentroid = p.centroid.length == n && _saneCentroid(p.centroid);
+    if (usableCentroid) {
+      // Never let an out-of-range sample count act as a merge weight; treat it
+      // as a single sample instead. Using the raw value is what exploded
+      // centroids to ~1e36.
+      final weight = p.faceSamples <= 0 || p.faceSamples > kMaxFaceSamples
+          ? 1
+          : p.faceSamples;
+      samples += weight;
+      for (var i = 0; i < n; i++) {
+        centroid[i] += p.centroid[i] * weight;
+      }
     }
     for (final name in p.allNames) {
       if (name.trim().isNotEmpty) collected.add(name.trim());
@@ -168,6 +189,9 @@ PersonIdentity mergePeople(
     for (var i = 0; i < n; i++) {
       centroid[i] /= samples;
     }
+  } else if (people.isNotEmpty && people.first.centroid.length == n) {
+    // Nothing usable to average: fall back to the primary person's centroid.
+    centroid.setAll(0, people.first.centroid);
   }
   final names = collected.toList();
   var primaryName = primary?.trim() ?? '';
@@ -187,6 +211,18 @@ PersonIdentity mergePeople(
     contactDisplayName: src?.contactDisplayName,
     contactPhotoUri: src?.contactPhotoUri,
   );
+}
+
+/// True when [v] looks like a real embedding centroid: finite components at
+/// embedding scale. A corrupted (exploded) centroid fails this and must not
+/// pollute a merge.
+bool _saneCentroid(Float32List v) {
+  var sum = 0.0;
+  for (final x in v) {
+    if (!x.isFinite || x.abs() > 1e3) return false;
+    sum += x * x;
+  }
+  return sum <= 1e6;
 }
 
 /// Returns the best-matching identity for [embedding], or null when nothing

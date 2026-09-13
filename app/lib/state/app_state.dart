@@ -7,6 +7,7 @@ import '../api/models.dart';
 import '../api/serve_client.dart';
 import '../ml/detection_index.dart';
 import '../ml/library_scanner.dart';
+import '../platform/preview_cache.dart';
 import '../sidecar/sidecar.dart';
 import '../sync/tags_sync.dart';
 
@@ -28,9 +29,10 @@ String? _appDataDir() {
 }
 
 class AppState extends ChangeNotifier {
-  AppState({ServeClient? client, Sidecar? sidecar})
+  AppState({ServeClient? client, Sidecar? sidecar, PreviewCache? previewCache})
       : _client = client ?? ServeClient(),
-        _sidecar = sidecar ?? Sidecar() {
+        _sidecar = sidecar ?? Sidecar(),
+        _previewDisk = previewCache ?? PreviewCache() {
     detector = LibraryScanner(
       detectionIndex,
       (String linkId, {int size = 512}) => preview(linkId, size: size),
@@ -39,6 +41,7 @@ class AppState extends ChangeNotifier {
 
   final ServeClient _client;
   final Sidecar _sidecar;
+  final PreviewCache _previewDisk;
 
   /// On-device, encrypted-at-rest detection index. Android only.
   final DetectionIndex detectionIndex = DetectionIndex();
@@ -82,11 +85,16 @@ class AppState extends ChangeNotifier {
   Future<void> init() async {
     try {
       _prepareSessionFiles();
+      await _previewDisk.init();
       final healthy = await _sidecar.start(
         sessionJson: _savedSessionJson,
         sessionOutPath: _sessionOutPath,
       );
       if (healthy) {
+        // The sidecar refreshes the Proton session as it runs and writes it to
+        // sessionOutPath; persist that so the next launch resumes with the
+        // current tokens instead of the ones from the last explicit login.
+        _persistRotatedSession();
         final authenticated = await _client.session();
         _phase = authenticated ? AppPhase.ready : AppPhase.loggedOut;
       } else {
@@ -195,27 +203,55 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Every asset linkId in the library, fetched by paging through `/assets`.
+  /// Scans use this so they cover the whole library, not just the pages the
+  /// gallery has scrolled into view.
+  Future<List<String>> libraryLinkIds() async {
+    final ids = <String>{};
+    String? cursor;
+    while (true) {
+      final page = await _client.listAssets(cursor: cursor, pageSize: 500);
+      ids.addAll(page.assets.map((p) => p.linkId));
+      final next = page.nextCursor;
+      if (next == null || next == cursor) break;
+      cursor = next;
+    }
+    return ids.toList();
+  }
+
   Future<Uint8List> preview(String linkId, {int size = 512}) {
-    final cached = _previewCache['$linkId@$size'];
+    final key = '$linkId@$size';
+    final cached = _previewCache[key];
     if (cached != null) return Future.value(cached);
-    final inFlight = _inFlight['$linkId@$size'];
+    final inFlight = _inFlight[key];
     if (inFlight != null) return inFlight;
 
-    final future = _fetchPreview(linkId, size);
-    _inFlight['$linkId@$size'] = future;
+    final future = _loadPreview(linkId, size, key);
+    _inFlight[key] = future;
     return future;
   }
 
-  Future<Uint8List> _fetchPreview(String linkId, int size) async {
+  /// Memory first, then the encrypted disk cache, then the server.
+  Future<Uint8List> _loadPreview(String linkId, int size, String key) async {
     try {
-      final bytes = await _client.preview(linkId, size: size);
-      _previewCache['$linkId@$size'] = bytes;
-      if (_previewCache.length > 300) {
-        _previewCache.remove(_previewCache.keys.first);
+      final disk = await _previewDisk.get(linkId, size);
+      if (disk != null) {
+        _rememberPreview(key, disk);
+        return disk;
       }
+      final bytes = await _client.preview(linkId, size: size);
+      _rememberPreview(key, bytes);
+      await _previewDisk.put(linkId, size, bytes);
       return bytes;
     } finally {
-      _inFlight.remove('$linkId@$size');
+      _inFlight.remove(key);
+    }
+  }
+
+  void _rememberPreview(String key, Uint8List bytes) {
+    _previewCache[key] = bytes;
+    if (_previewCache.length > 300) {
+      _previewCache.remove(_previewCache.keys.first);
     }
   }
 
