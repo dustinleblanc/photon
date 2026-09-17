@@ -2,13 +2,13 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:image/image.dart' as img;
 
 import '../ml/detection_index.dart';
 import '../ml/faces.dart';
 import '../platform/contacts.dart';
 import '../state/app_state.dart';
 import 'contact_picker.dart';
+import 'photo_tile.dart';
 import 'person_detail_screen.dart';
 import 'unnamed_people_screen.dart';
 
@@ -433,11 +433,8 @@ class _PersonCardState extends State<_PersonCard> {
     final src = widget.source;
     if (id == null || src == null) return;
     _loadedFor = src.linkId;
-    Uint8List? bytes;
-    final decoded = await decodedPreviewFor(widget.state!, src.linkId);
-    if (decoded != null) {
-      bytes = cropFaceJpegFromDecoded(decoded, src.rect, size: 220);
-    }
+    Uint8List? bytes =
+        await faceThumb(widget.state!, src.linkId, src.rect, size: 220);
     if (bytes == null && Platform.isAndroid && id.linkedToContact) {
       bytes = await contactPhoto(id.contactId!);
     }
@@ -468,7 +465,7 @@ class _PersonCardState extends State<_PersonCard> {
                 ClipRRect(
                   borderRadius: BorderRadius.circular(12),
                   child: _thumb != null
-                      ? Image.memory(_thumb!, fit: BoxFit.cover)
+                      ? Image.memory(_thumb!, fit: BoxFit.cover, cacheWidth: 260)
                       : Container(
                           color: scheme.surfaceContainerHighest,
                           child: Center(child: fallback),
@@ -573,19 +570,3 @@ class _TileMenu extends StatelessWidget {
   }
 }
 
-/// Decoded preview cache shared by all tiles: one fetch per source photo no
-/// matter how many people appear in it.
-final Map<String, img.Image?> decodedPreviewCache = {};
-
-Future<img.Image?> decodedPreviewFor(AppState state, String linkId) async {
-  if (decodedPreviewCache.containsKey(linkId)) {
-    return decodedPreviewCache[linkId];
-  }
-  img.Image? decoded;
-  try {
-    final bytes = await state.preview(linkId, size: 800);
-    decoded = img.decodeImage(bytes);
-  } catch (_) {}
-  decodedPreviewCache[linkId] = decoded;
-  return decoded;
-}

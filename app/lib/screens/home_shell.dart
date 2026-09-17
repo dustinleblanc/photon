@@ -34,17 +34,40 @@ class _HomeShellState extends State<HomeShell> {
   bool _canPop = false;
   String? _pushedTitle;
 
+  bool _wasScanning = false;
+
   @override
   void initState() {
     super.initState();
     _searchFocus.addListener(() => setState(() {}));
+    widget.state.detector.addListener(_onScannerChanged);
   }
 
   @override
   void dispose() {
+    widget.state.detector.removeListener(_onScannerChanged);
     _search.dispose();
     _searchFocus.dispose();
     super.dispose();
+  }
+
+  /// Scans used to fail silently: the error was stored but never shown, so a
+  /// failing scan looked like a no-op. Report the outcome when one ends.
+  void _onScannerChanged() {
+    final scanner = widget.state.detector;
+    final running = scanner.running;
+    if (_wasScanning && !running && mounted) {
+      final error = scanner.error;
+      final message = error != null
+          ? 'Scan failed: $error'
+          : scanner.scanned == 0
+              ? 'Nothing to scan — ${scanner.total} photos already processed'
+              : 'Scanned ${scanner.scanned} photos';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    }
+    _wasScanning = running;
   }
 
   void _selectSection(int index) {
@@ -87,6 +110,32 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
+  bool _preparingScan = false;
+
+  /// Scans the entire library (not just the pages loaded into the gallery).
+  Future<void> _toggleScan() async {
+    final state = widget.state;
+    final scanner = state.detector;
+    if (scanner.running) {
+      scanner.cancel();
+      return;
+    }
+    if (_preparingScan) return;
+    setState(() => _preparingScan = true);
+    try {
+      final linkIds = await state.libraryLinkIds();
+      if (mounted) scanner.start(linkIds);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not load the photo library: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _preparingScan = false);
+    }
+  }
+
   Future<void> _openSettings() async {
     _push(
       SettingsScreen(state: widget.state, embedded: true),
@@ -95,14 +144,23 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   /// Turns a route change into top-bar state: whether Back is available and
-  /// what the current page is called.
+  /// what the current page is called. The observer also fires while the
+  /// Navigator is still building its first route, where calling setState
+  /// directly throws ("setState() called during build"), so the update is
+  /// deferred to the next frame.
   void _onRouteChanged(Route? route) {
     final nav = _navigator.currentState;
     if (nav == null) return;
     final canPop = nav.canPop();
-    setState(() {
-      _canPop = canPop;
-      _pushedTitle = canPop ? route?.settings.name : null;
+    final title = canPop ? route?.settings.name : null;
+    if (canPop == _canPop && title == _pushedTitle) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (canPop == _canPop && title == _pushedTitle) return;
+      setState(() {
+        _canPop = canPop;
+        _pushedTitle = title;
+      });
     });
   }
 
@@ -144,6 +202,8 @@ class _HomeShellState extends State<HomeShell> {
                   title: _pushedTitle ?? _sectionTitle,
                   canPop: _canPop,
                   onBack: () => _navigator.currentState?.pop(),
+                  onScan: _toggleScan,
+                  scanPreparing: _preparingScan,
                   search: _search,
                   searchFocus: _searchFocus,
                   onOpenPerson: _openPerson,
@@ -200,6 +260,8 @@ class _TopBar extends StatelessWidget {
     required this.title,
     required this.canPop,
     required this.onBack,
+    required this.onScan,
+    required this.scanPreparing,
     required this.search,
     required this.searchFocus,
     required this.onOpenPerson,
@@ -210,6 +272,8 @@ class _TopBar extends StatelessWidget {
   final String title;
   final bool canPop;
   final VoidCallback onBack;
+  final VoidCallback onScan;
+  final bool scanPreparing;
   final TextEditingController search;
   final FocusNode searchFocus;
   final ValueChanged<String> onOpenPerson;
@@ -293,7 +357,7 @@ class _TopBar extends StatelessWidget {
                   onSelected: (action) async {
                     switch (action) {
                       case 'scan':
-                        _toggleScan(state);
+                        onScan();
                       case 'classify':
                         final ids = await state.libraryLinkIds();
                         if (state.detector.running) return;
@@ -319,10 +383,13 @@ class _TopBar extends StatelessWidget {
                   itemBuilder: (context) => [
                     PopupMenuItem(
                       value: 'scan',
+                      enabled: !scanPreparing,
                       child: Text(
                         state.detector.running
                             ? 'Stop scanning'
-                            : 'Scan library',
+                            : scanPreparing
+                                ? 'Preparing…'
+                                : 'Scan library',
                       ),
                     ),
                     const PopupMenuItem(
@@ -350,14 +417,6 @@ class _TopBar extends StatelessWidget {
     );
   }
 
-  void _toggleScan(AppState state) {
-    final scanner = state.detector;
-    if (scanner.running) {
-      scanner.cancel();
-      return;
-    }
-    unawaited(scanner.start([for (final p in state.photos) p.linkId]));
-  }
 }
 
 /// Top-bar search over people: type a name (or alias), pick a match, and the

@@ -20,6 +20,7 @@ class LibraryScanner extends ChangeNotifier {
   bool _running = false;
   bool _cancelRequested = false;
   int _processed = 0;
+  int _scanned = 0;
   int _total = 0;
   int _illustrationsFound = 0;
   String? _error;
@@ -27,6 +28,9 @@ class LibraryScanner extends ChangeNotifier {
   bool get running => _running;
   bool get cancelRequested => _cancelRequested;
   int get processed => _processed;
+
+  /// Photos actually (re)processed, as opposed to skipped as already-scanned.
+  int get scanned => _scanned;
   int get total => _total;
   double? get progress => _total == 0 ? null : _processed / _total;
   String? get error => _error;
@@ -36,6 +40,7 @@ class LibraryScanner extends ChangeNotifier {
     _running = true;
     _cancelRequested = false;
     _processed = 0;
+    _scanned = 0;
     _error = null;
     _total = linkIds.length;
     notifyListeners();
@@ -74,11 +79,14 @@ class LibraryScanner extends ChangeNotifier {
               objects
                   .any((o) => groupForLabel(o.label) == DetectionGroup.people);
           if (hasPeople) {
-            detectedFaces = await faces.detectFaces(
+            final detected = await faces.detectFaces(
               bytes: bytes,
               imageWidth: width,
               imageHeight: height,
             );
+            // Second line of defense against illustrations the whole-image
+            // test missed: drop faces whose crop itself looks drawn.
+            detectedFaces = await _withoutDrawnFaces(bytes, detected);
             autoMatchFaces(detectedFaces, matcher: _index.faceMatcher());
           }
           await _index.put(
@@ -93,6 +101,7 @@ class LibraryScanner extends ChangeNotifier {
               facesChecked: true,
             ),
           );
+          _scanned++;
         } catch (e) {
           _error = e.toString();
         }
@@ -107,6 +116,29 @@ class LibraryScanner extends ChangeNotifier {
       _running = false;
       notifyListeners();
     }
+  }
+
+  /// Removes faces whose own crop looks drawn (a cartoon face in an image
+  /// the whole-image classifier judged a photo). Runs off the UI thread.
+  Future<List<DetectedFace>> _withoutDrawnFaces(
+    Uint8List bytes,
+    List<DetectedFace> faces,
+  ) async {
+    if (faces.isEmpty) return faces;
+    final coords = <double>[
+      for (final f in faces) ...[
+        f.rect.left,
+        f.rect.top,
+        f.rect.right,
+        f.rect.bottom,
+      ],
+    ];
+    final flags = await compute(drawnFacesFromBytes, (bytes, coords));
+    if (flags == null || flags.length != faces.length) return faces;
+    return [
+      for (var i = 0; i < faces.length; i++)
+        if (!flags[i]) faces[i],
+    ];
   }
 
   /// One-time style pass over already-scanned photos: recomputes the

@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- One-tap "Looks like X?" suggestions on the unnamed-people worklist: faces
+  just below the automatic threshold are offered with the closest person, and
+  confirming adds a sample that backfills their similar photos.
+- The unnamed worklist is grouped by appearance, so near-identical photos of
+  the same unknown person collapse into one tile ("N photos").
+- Second line of defense against illustrations: a face whose own crop looks
+  drawn (flat, small palette) is dropped even when the whole-image check
+  judged the photo a photograph.
+- Wi-Fi ADB tooling: `make apk-wifi` builds, installs and relaunches on the
+  phone over the network; `android-wifi-connect/-pair/-disconnect`. Hot-reload
+  dev targets `make dev-mac` / `make dev-android`.
+- Scan outcomes are reported ("Scanned N photos", "Nothing to scan — N photos
+  already processed", or "Scan failed: …"); previously scan errors were stored
+  but never shown, so a failure looked like a no-op.
+
+### Changed
+
+- Face matching recalls more of the right faces without loosening into
+  lookalikes: matches at ≥0.80 similarity win over a nearby relative's
+  centroid, the centroid floor widened to allow correct faces that sat just
+  under it, and a well-confirmed person may match slightly lower (bounded),
+  while the ambiguity margin, centroid gate and medoid trimming still apply.
+
+### Fixed
+
+- The desktop "Scan library" action only scanned the pages loaded in the
+  gallery, silently leaving most of a large library unindexed; it now pages
+  the entire library feed first.
+- Tagging and scanning stalled the UI: the matcher recomputed each identity's
+  coherent-sample subset on every comparison (millions of cosine ops), the
+  library-wide best-face map was rebuilt on every People-page build, and the
+  index notified listeners once per photo while scanning. These are now
+  cached/memoized and notifications are coalesced.
+- Face thumbnails were re-derived on every launch and requested the HD preview
+  tier; they now use the cheap tier and are persisted in the encrypted preview
+  cache, with a stable in-memory copy so scrolling reuses decoded bitmaps.
+- The desktop shell showed two scan progress bars; the embedded gallery no
+  longer draws its own when the shell owns the meter.
+
 ## [0.10.0] - 2026-09-13
 
 ### Added

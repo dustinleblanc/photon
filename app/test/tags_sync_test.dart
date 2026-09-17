@@ -263,6 +263,29 @@ void main() {
     expect(index.facesFor('photo-tiny').single.name, isNull);
   });
 
+  test('a strong broad match wins over a close lookalike', () async {
+    // A is a very strong match (peak 0.85, centroid 0.85) but a lookalike
+    // B is only 0.03 behind — inside the ambiguity margin. At this
+    // confidence the best match is accepted (relatives score high against
+    // each other, which used to veto correct photos).
+    final a = Float32List(192)..[0] = 1;
+    final q = Float32List(192)
+      ..[0] = 0.85
+      ..[1] = 0.5268; // unit: 0.85² + 0.5268² ≈ 1
+    final b = Float32List(192)
+      ..[0] = 0.82 * 0.85
+      ..[1] = 0.82 * 0.5268
+      ..[2] = 0.5723; // unit, cos(q, b) = 0.82
+    await index.upsertIdentity('A', a);
+    await index.upsertIdentity('B', b);
+    expect(faceMatchScore(q, b), closeTo(0.82, 1e-3));
+
+    await index.put(entryWithFace('q-photo', q));
+    await index.rematchUnnamed();
+
+    expect(index.facesFor('q-photo').single.name, 'A');
+  });
+
   test('ignoring a face untags and ignores it in every photo', () async {
     final alexFace = Float32List(192)..[0] = 1;
     final rileyFace = Float32List(192)..[1] = 1;

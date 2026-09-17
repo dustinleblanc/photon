@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import '../ml/detection_index.dart';
 import '../ml/faces.dart';
 import '../state/app_state.dart';
-import 'people_screen.dart';
+import 'photo_tile.dart';
 
 /// Worklist for getting unknown faces dealt with: a grid of face captures,
 /// each with a quick naming field and an ignore action. Naming (or ignoring)
@@ -23,12 +23,15 @@ class UnnamedPeopleScreen extends StatelessWidget {
       body: ListenableBuilder(
         listenable: index,
         builder: (context, _) {
-          final faces = index.unnamedFaces();
-          if (faces.isEmpty) {
+          // One tile per likely person: faces that look like the same
+          // unknown person are grouped, so near-identical photos collapse.
+          final clusters = index.unnamedClusters();
+          if (clusters.isEmpty) {
             return const Center(
               child: Text('Everyone is named. Nice work.'),
             );
           }
+          final matcher = index.faceMatcher();
           return GridView.builder(
             padding: const EdgeInsets.all(12),
             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
@@ -37,12 +40,19 @@ class UnnamedPeopleScreen extends StatelessWidget {
               crossAxisSpacing: 12,
               childAspectRatio: 0.72,
             ),
-            itemCount: faces.length,
-            itemBuilder: (context, i) => _UnnamedFaceTile(
-              key: ValueKey('${faces[i].linkId}:${faces[i].faceIndex}'),
-              state: state,
-              face: faces[i],
-            ),
+            itemCount: clusters.length,
+            itemBuilder: (context, i) {
+              final cluster = clusters[i];
+              return _UnnamedFaceTile(
+                key: ValueKey(
+                  '${cluster.first.linkId}:${cluster.first.faceIndex}',
+                ),
+                state: state,
+                face: cluster.first,
+                clusterSize: cluster.length,
+                matcher: matcher,
+              );
+            },
           );
         },
       ),
@@ -55,10 +65,14 @@ class _UnnamedFaceTile extends StatefulWidget {
     super.key,
     required this.state,
     required this.face,
+    required this.clusterSize,
+    required this.matcher,
   });
 
   final AppState state;
   final ({String linkId, int faceIndex, Rect rect}) face;
+  final int clusterSize;
+  final FaceMatcher matcher;
 
   @override
   State<_UnnamedFaceTile> createState() => _UnnamedFaceTileState();
@@ -71,6 +85,20 @@ class _UnnamedFaceTileState extends State<_UnnamedFaceTile> {
   final FocusNode _focus = FocusNode();
 
   DetectionIndex get _index => widget.state.detectionIndex;
+
+  Future<void> _confirmSuggestion(String name) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await _index.nameFace(
+        linkId: widget.face.linkId,
+        faceIndex: widget.face.faceIndex,
+        name: name,
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   @override
   void initState() {
@@ -86,12 +114,12 @@ class _UnnamedFaceTileState extends State<_UnnamedFaceTile> {
   }
 
   Future<void> _load() async {
-    final decoded = await decodedPreviewFor(widget.state, widget.face.linkId);
-    if (!mounted) return;
-    Uint8List? thumb;
-    if (decoded != null) {
-      thumb = cropFaceJpegFromDecoded(decoded, widget.face.rect, size: 200);
-    }
+    final thumb = await faceThumb(
+      widget.state,
+      widget.face.linkId,
+      widget.face.rect,
+      size: 200,
+    );
     if (!mounted) return;
     setState(() => _thumb = thumb);
   }
@@ -127,18 +155,66 @@ class _UnnamedFaceTileState extends State<_UnnamedFaceTile> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final entry = _index.lookup(widget.face.linkId);
+    final embedding =
+        (entry != null && widget.face.faceIndex < entry.faces.length)
+            ? entry.faces[widget.face.faceIndex].embedding
+            : Float32List(0);
+    final suggestion =
+        embedding.isEmpty ? null : widget.matcher.suggestion(embedding);
     return Opacity(
       opacity: _busy ? 0.5 : 1,
       child: Column(
         children: [
           Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: _thumb != null
-                  ? Image.memory(_thumb!, fit: BoxFit.cover)
-                  : Container(color: scheme.surfaceContainerHighest),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: _thumb != null
+                      ? Image.memory(_thumb!, fit: BoxFit.cover, cacheWidth: 260)
+                      : Container(color: scheme.surfaceContainerHighest),
+                ),
+                if (widget.clusterSize > 1)
+                  Positioned(
+                    top: 6,
+                    right: 6,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        '${widget.clusterSize} photos',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
+          if (suggestion != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: ActionChip(
+                avatar: const Icon(Icons.help_outline, size: 16),
+                label: Text(
+                  'Looks like ${suggestion.identity.name}?',
+                  style: const TextStyle(fontSize: 12),
+                ),
+                onPressed: _busy
+                    ? null
+                    : () => _confirmSuggestion(suggestion.identity.name),
+              ),
+            ),
           const SizedBox(height: 6),
           RawAutocomplete<String>(
             textEditingController: _name,

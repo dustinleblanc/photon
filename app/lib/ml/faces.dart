@@ -87,7 +87,22 @@ const double kMinIdentityCohesion = 0.45;
 /// while a single confirmed sample still clears it. Max-over-samples gives
 /// recall for pose/angle variation, but without this a face that only matches
 /// one outlier sample could be named; the centroid must be broadly close too.
-const double kCentroidFloorDelta = 0.05;
+/// Widened from 0.05 after auditing: correct faces for well-taught people
+/// were landing just under it (peak 0.73, centroid 0.64).
+const double kCentroidFloorDelta = 0.08;
+
+/// A match this strong is accepted even when a lookalike's centroid sits
+/// within the ambiguity margin. Relatives genuinely score 0.75-0.85 against
+/// each other, so the margin was vetoing correct Riley/Alex photos at 0.80+;
+/// at this confidence the best match is the right call.
+const double kHighConfidencePeak = 0.80;
+const double kHighConfidenceCentroid = 0.75;
+
+/// Similarity at or above which an unnamed face is offered as a one-tap
+/// suggestion ("Looks like Tobias?") even though it is below the automatic
+/// threshold. Confirming adds a sample, which then backfills the person's
+/// other similar photos.
+const double kSuggestionFloor = 0.55;
 
 /// Upper bound on a plausible sample count. Nothing in the app produces more,
 /// but a corrupt sync document did: using those values as merge weights
@@ -132,9 +147,20 @@ class FaceMatcher {
   final List<PersonIdentity> identities;
   final Map<String, List<Float32List>> confirmedSamples;
   final Map<String, Float32List> _centroidCache = {};
+  final Map<String, List<Float32List>> _coherentCache = {};
 
   PersonIdentity identityFor(String name) =>
       identities.firstWhere((i) => i.name == name);
+
+  /// Per-identity threshold. A well-confirmed person earns a small, bounded
+  /// ease (up to 0.05) because their profile is trustworthy and their faces
+  /// vary more than a one-photo profile can capture. This is safe now that
+  /// the centroid floor, ambiguity margin and medoid trimming all apply —
+  /// unlike the old unbounded easing that let lookalikes through.
+  double thresholdFor(PersonIdentity id) {
+    final bonus = (0.01 * id.faceSamples).clamp(0.0, 0.05);
+    return kDefaultFaceMatchThreshold - bonus;
+  }
 
   /// The centroid used for matching: derived from the identity's coherent
   /// confirmed samples when there are enough of them, falling back to the
@@ -166,19 +192,52 @@ class FaceMatcher {
     return centroid;
   }
 
-  /// Best similarity between [embedding] and any of [id]'s references (the
-  /// effective centroid or any coherent confirmed sample).
-  double scoreFor(Float32List embedding, PersonIdentity id) {
+  /// The identity's coherent confirmed samples, computed once. Without this
+  /// cache the O(samples^2) medoid trim ran on every scoreFor call — millions
+  /// of cosine ops during a naming sweep, which is what stalled the UI.
+  List<Float32List> _coherentFor(PersonIdentity id) {
+    final cached = _coherentCache[id.name];
+    if (cached != null) return cached;
     final list = confirmedSamples[id.name];
     final coherent = (list != null && list.length >= 3)
         ? trimSamples(list)
         : (list ?? const <Float32List>[]);
+    _coherentCache[id.name] = coherent;
+    return coherent;
+  }
+
+  /// Best similarity between [embedding] and any of [id]'s references (the
+  /// effective centroid or any coherent confirmed sample).
+  double scoreFor(Float32List embedding, PersonIdentity id) {
+    final coherent = _coherentFor(id);
     var best = faceMatchScore(embedding, effectiveCentroid(id));
     for (final sample in coherent) {
       final s = faceMatchScore(embedding, sample);
       if (s > best) best = s;
     }
     return best;
+  }
+
+  /// A best-guess identity for an unnamed face that did not clear the
+  /// automatic threshold, when it is close enough to be worth offering as a
+  /// one-tap confirmation. Returns null when the face already auto-matches
+  /// or nothing is close.
+  ({PersonIdentity identity, double score})? suggestion(
+    Float32List embedding,
+  ) {
+    if (identities.isEmpty) return null;
+    if (match(embedding) != null) return null;
+    PersonIdentity? best;
+    var bestScore = 0.0;
+    for (final id in identities) {
+      final s = scoreFor(embedding, id);
+      if (best == null || s > bestScore) {
+        best = id;
+        bestScore = s;
+      }
+    }
+    if (best == null || bestScore < kSuggestionFloor) return null;
+    return (identity: best, score: bestScore);
   }
 
   /// The identity [embedding] belongs to, or null when nothing matches
@@ -205,14 +264,20 @@ class FaceMatcher {
       }
     }
     if (bestId == null) return null;
-    if (bestPeak < kDefaultFaceMatchThreshold) return null;
-    if (bestCentroid < kDefaultFaceMatchThreshold - kCentroidFloorDelta) {
+    final threshold = thresholdFor(bestId);
+    if (bestPeak < threshold) return null;
+    if (bestCentroid < threshold - kCentroidFloorDelta) {
       return null;
+    }
+    // Strong, broad matches win outright over lookalike ambiguity.
+    if (bestPeak >= kHighConfidencePeak &&
+        bestCentroid >= kHighConfidenceCentroid) {
+      return bestId.name;
     }
     for (final id in identities) {
       if (id.name == bestId.name) continue;
       final centroid = faceMatchScore(embedding, effectiveCentroid(id));
-      if (centroid >= kDefaultFaceMatchThreshold &&
+      if (centroid >= thresholdFor(id) &&
           bestPeak - centroid < kFaceMatchMargin) {
         return null;
       }

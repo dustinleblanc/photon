@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 
+import '../ml/faces.dart';
 import '../state/app_state.dart';
 
 /// One photo thumbnail. Shared by the main gallery and the person page so
@@ -82,15 +84,68 @@ class _PhotoTileState extends State<PhotoTile> {
 /// matter how many people appear in it.
 final Map<String, img.Image?> decodedPreviewCache = {};
 
-Future<img.Image?> decodedPreviewFor(AppState state, String linkId) async {
-  if (decodedPreviewCache.containsKey(linkId)) {
-    return decodedPreviewCache[linkId];
+Future<img.Image?> decodedPreviewFor(
+  AppState state,
+  String linkId, {
+  int size = 512,
+}) async {
+  final key = '$linkId@$size';
+  if (decodedPreviewCache.containsKey(key)) {
+    return decodedPreviewCache[key];
   }
   img.Image? decoded;
   try {
-    final bytes = await state.preview(linkId, size: 800);
+    // 512 is the cheap server tier: requesting more serves the 1920px HD
+    // preview, which is needlessly slow to decrypt and decode for a tile.
+    final bytes = await state.preview(linkId, size: size);
     decoded = img.decodeImage(bytes);
   } catch (_) {}
-  decodedPreviewCache[linkId] = decoded;
+  decodedPreviewCache[key] = decoded;
   return decoded;
 }
+
+/// A face-crop thumbnail, persisted in the encrypted cache. The key folds in
+/// the source photo and the face rect so the crop can be reused across
+/// launches without re-fetching or re-decoding the preview.
+Future<Uint8List?> faceThumb(
+  AppState state,
+  String linkId,
+  Rect rect, {
+  int size = 200,
+}) async {
+  final rectKey = '${rect.left.toStringAsFixed(3)},'
+      '${rect.top.toStringAsFixed(3)},'
+      '${rect.right.toStringAsFixed(3)},'
+      '${rect.bottom.toStringAsFixed(3)}';
+  final key = 'face|$linkId|$rectKey|$size';
+  // Memory first: returning the SAME Uint8List lets Flutter's image cache
+  // reuse the decoded bitmap, and avoids re-decrypting from disk on every
+  // rebuild (which made scrolling jittery).
+  final memory = faceThumbCache[key];
+  if (memory != null) return memory;
+  final cached = await state.cachedThumb(key, size);
+  if (cached != null) {
+    _rememberThumb(key, cached);
+    return cached;
+  }
+  final decoded = await decodedPreviewFor(state, linkId);
+  if (decoded == null) return null;
+  final bytes = cropFaceJpegFromDecoded(decoded, rect, size: size);
+  if (bytes.isNotEmpty) {
+    _rememberThumb(key, bytes);
+    unawaited(state.putThumb(key, size, bytes));
+  }
+  return bytes;
+}
+
+void _rememberThumb(String key, Uint8List bytes) {
+  faceThumbCache[key] = bytes;
+  if (faceThumbCache.length > _faceThumbCacheCap) {
+    faceThumbCache.remove(faceThumbCache.keys.first);
+  }
+}
+
+/// In-memory face-crop thumbnails, keyed like the on-disk cache. Keeps the
+/// byte identity stable so Flutter reuses decoded bitmaps, and caps memory.
+final Map<String, Uint8List> faceThumbCache = {};
+const int _faceThumbCacheCap = 600;

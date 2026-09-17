@@ -271,6 +271,16 @@ class AppState extends ChangeNotifier {
 
   Future<Uint8List> original(String linkId) => _client.original(linkId);
 
+  /// A persisted derived thumbnail (e.g. a face crop), stored in the same
+  /// encrypted on-disk cache as previews. Lets the People page paint face
+  /// tiles from disk instead of re-fetching and re-decoding a preview on
+  /// every launch.
+  Future<Uint8List?> cachedThumb(String key, int size) =>
+      _previewDisk.get(key, size);
+
+  Future<void> putThumb(String key, int size, Uint8List bytes) =>
+      _previewDisk.put(key, size, bytes);
+
   void _persistRotatedSession() {
     if (_sessionOutPath.isEmpty) return;
     try {
