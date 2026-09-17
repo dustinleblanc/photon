@@ -14,6 +14,8 @@ endif
 
 APP_DIR   := app
 PHOTON    := build/photon
+ADB       ?= $(shell command -v adb 2>/dev/null || echo $(HOME)/Library/Android/sdk/platform-tools/adb)
+ANDROID_APP_ID := com.dustinleblanc.photon.photon_library
 PKGS      := ./...
 ROOT      := $(CURDIR)
 JAVA_HOME ?= /opt/homebrew/opt/openjdk@17
@@ -100,15 +102,54 @@ build-apk: build-android-embed ## Build the Flutter Android debug APK (embeds ph
 	cd $(APP_DIR) && JAVA_HOME=$(JAVA_HOME) flutter build apk --debug
 
 .PHONY: run-android
-run-android: ## Run the Flutter app on a connected Android device (needs adb reverse)
+run-android: ## Run the Flutter app on a connected Android device
 	cd $(APP_DIR) && JAVA_HOME=$(JAVA_HOME) flutter run -d android
 
+.PHONY: android-wifi-connect
+android-wifi-connect: ## Connect to the phone over Wi-Fi (auto-discovers it on the LAN)
+	@SVC="$(HOST)"; \
+	if [ -z "$$SVC" ]; then \
+	  SVC=$$($(ADB) mdns services 2>/dev/null | awk '/_adb-tls-connect\._tcp/ {print $$3; exit}'); \
+	fi; \
+	if [ -z "$$SVC" ]; then \
+	  echo "No wireless Android device found on the network."; \
+	  echo "  1. Phone: Settings > System > Developer options > Wireless debugging > ON"; \
+	  echo "  2. Open 'Wireless debugging' and keep that screen on (it shows the address)"; \
+	  echo "  3. Re-run 'make android-wifi-connect'"; \
+	  echo "     or pass it: make android-wifi-connect HOST=192.168.1.75:33215"; \
+	  exit 1; \
+	fi; \
+	$(ADB) disconnect "$$SVC" >/dev/null 2>&1 || true; \
+	$(ADB) connect "$$SVC"; \
+	$(ADB) devices -l | grep -q . || true
+
+.PHONY: android-wifi-pair
+android-wifi-pair: ## First-time Wi-Fi pairing: make android-wifi-pair HOST=ip:port CODE=123456
+	@test -n "$(HOST)" -a -n "$(CODE)" || { \
+	  echo "usage: make android-wifi-pair HOST=<ip:port> CODE=<6-digit code>"; \
+	  echo "Both are on the phone under Wireless debugging > 'Pair device with pairing code'."; \
+	  echo "(The pairing port differs from the connect port; pair once, then use android-wifi-connect.)"; \
+	  exit 1; }; \
+	$(ADB) pair "$(HOST)" "$(CODE)"
+
+.PHONY: android-wifi-disconnect
+android-wifi-disconnect: ## Drop the Wi-Fi adb connection
+	@$(ADB) devices | awk '/:.*device$$/ {print $$1}' | xargs -n1 $(ADB) disconnect 2>/dev/null || true
+
+.PHONY: apk-install
+apk-install: ## Install the built debug APK on the connected phone, then relaunch it
+	$(ADB) install -r $(APP_DIR)/build/app/outputs/flutter-apk/app-debug.apk
+	-@$(ADB) shell am force-stop $(ANDROID_APP_ID)
+	@$(ADB) shell am start -n $(ANDROID_APP_ID)/.MainActivity
+
+.PHONY: apk-wifi
+apk-wifi: android-wifi-connect build-apk ## Build the APK and push it to the phone over Wi-Fi
+	$(MAKE) apk-install
+	@echo "Pushed to the phone over Wi-Fi."
+
 .PHONY: reverse
-reverse: ## Forward device tcp:8787 to a local photon serve
-	@mkdir -p $(HOME)/Library/Android/sdk/platform-tools 2>/dev/null; \
-	ADB=$$(command -v adb 2>/dev/null || echo $(HOME)/Library/Android/sdk/platform-tools/adb); \
-	$$ADB reverse tcp:8787 tcp:8787
-	@echo "photon serve must be running on 127.0.0.1:8787 (make run-serve)"
+reverse: ## (Legacy) Forward device tcp:8787 to a host photon serve; not needed with the embedded server
+	@echo "Not needed any more: the Android app runs photon serve on-device."
 
 .PHONY: app-bundle
 app-bundle: ## Assemble the full PhotonMigrate.app bundle (menubar migration app)
