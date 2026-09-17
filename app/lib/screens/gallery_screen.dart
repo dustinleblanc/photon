@@ -9,14 +9,28 @@ import '../ml/detection_index.dart';
 import '../ml/library_scanner.dart';
 import '../state/app_state.dart';
 import 'lightbox_screen.dart';
-import 'people_screen.dart';
 import 'photo_tile.dart';
 import 'settings_screen.dart';
 class GalleryScreen extends StatefulWidget {
-  const GalleryScreen({super.key, required this.state, this.embedded = false});
+  const GalleryScreen({
+    super.key,
+    required this.state,
+    this.embedded = false,
+    this.groups,
+    this.label,
+  });
 
-  /// True when hosted inside the desktop shell, which supplies the app bar.
+  /// True when hosted inside the app shell, which supplies the app bar and
+  /// the navigation menu.
   final bool embedded;
+
+  /// Detection groups to show; null means every photo. Ignored when [label]
+  /// is set.
+  final Set<DetectionGroup>? groups;
+
+  /// A specific detected object label to show (e.g. "motorcycle"), reached
+  /// through search. Null when filtering by group or showing everything.
+  final String? label;
 
   final AppState state;
 
@@ -26,7 +40,6 @@ class GalleryScreen extends StatefulWidget {
 
 class _GalleryScreenState extends State<GalleryScreen> {
   final _scroll = ScrollController();
-  DetectionGroup? _filter;
   bool _preparingScan = false;
 
   bool _wasScanning = false;
@@ -168,18 +181,15 @@ class _GalleryScreenState extends State<GalleryScreen> {
                       ? _ScanProgress(scanner: scanner)
                       : const SizedBox.shrink(),
                 ),
-              _FilterBar(
-                selected: _filter,
-                scannedCount: index.scannedCount,
-                onSelected: (g) => setState(() => _filter = g),
-                onPeople: _showPeopleSheet,
-              ),
               Expanded(
                 child: filtered.isEmpty
                     ? _EmptyFilter(
-                        group: _filter,
+                        label: widget.label,
+                        groups: widget.groups,
                         scannedCount: index.scannedCount,
-                        onScan: _filter == null ? null : _toggleScan,
+                        onScan: widget.label == null && widget.groups == null
+                            ? null
+                            : _toggleScan,
                       )
                     : GridView.builder(
                         controller: _scroll,
@@ -227,7 +237,15 @@ class _GalleryScreenState extends State<GalleryScreen> {
     // Hidden people are kept out of the unfiltered and group views, so their
     // photos don't get surfaced unasked.
     if (index.hasAnyPerson(linkId, hidden)) return false;
-    if (_filter != null) return index.hasGroup(linkId, _filter!);
+    final label = widget.label;
+    if (label != null) return index.hasLabel(linkId, label);
+    final groups = widget.groups;
+    if (groups != null) {
+      for (final g in groups) {
+        if (index.hasGroup(linkId, g)) return true;
+      }
+      return false;
+    }
     return true;
   }
 
@@ -237,18 +255,13 @@ class _GalleryScreenState extends State<GalleryScreen> {
   /// triggers the pagination listener, leaving a spinner forever. Whenever a
   /// filter is active and pages remain, keep fetching in the background.
   void _loadRemainingForFilter() {
-    if (_filter == null || !widget.state.hasMore || widget.state.loading) {
+    if ((widget.label == null && widget.groups == null) ||
+        !widget.state.hasMore ||
+        widget.state.loading) {
       return;
     }
     unawaited(
       widget.state.loadAll().catchError((_) {}),
-    );
-  }
-
-  Future<void> _showPeopleSheet() {
-    // The People page now owns per-person filtering and actions.
-    return Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => PeopleScreen(state: widget.state)),
     );
   }
 
@@ -298,83 +311,23 @@ class _ScanProgress extends StatelessWidget {
   }
 }
 
-class _FilterBar extends StatelessWidget {
-  const _FilterBar({
-    required this.selected,
-    required this.scannedCount,
-    required this.onSelected,
-    required this.onPeople,
-  });
-
-  final DetectionGroup? selected;
-  final int scannedCount;
-  final ValueChanged<DetectionGroup?> onSelected;
-  final VoidCallback onPeople;
-
-  @override
-  Widget build(BuildContext context) {
-    const personActive = false;
-    final chips = <Widget>[
-      Padding(
-        padding: const EdgeInsets.only(left: 12),
-        child: FilterChip(
-          label: const Text('All'),
-          selected: !personActive && selected == null,
-          onSelected: (_) => onSelected(null),
-        ),
-      ),
-      Padding(
-        padding: const EdgeInsets.only(left: 8),
-        child: FilterChip(
-          avatar: const Icon(Icons.face, size: 18),
-          label: Text(
-            'People',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          selected: personActive,
-          onSelected: (_) => onPeople(),
-          tooltip: 'Filter by person',
-        ),
-      ),
-      for (final g in DetectionGroup.values)
-        if (g != DetectionGroup.people) ...[
-          Padding(
-            padding: const EdgeInsets.only(left: 8),
-            child: FilterChip(
-              avatar: Icon(g.icon, size: 18),
-              label: Text(g.label),
-              selected: !personActive && selected == g,
-              onSelected: (_) => onSelected(g),
-            ),
-          ),
-        ],
-    ];
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Wrap(spacing: 4, runSpacing: 4, children: chips),
-      ),
-    );
-  }
-}
-
 
 class _EmptyFilter extends StatelessWidget {
   const _EmptyFilter({
-    this.group,
+    this.label,
+    this.groups,
     required this.scannedCount,
     required this.onScan,
   });
 
-  final DetectionGroup? group;
+  final String? label;
+  final Set<DetectionGroup>? groups;
   final int scannedCount;
   final VoidCallback? onScan;
 
   @override
   Widget build(BuildContext context) {
-    if (scannedCount == 0 && group != null) {
+    if (scannedCount == 0 && (label != null || groups != null)) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -390,7 +343,9 @@ class _EmptyFilter extends StatelessWidget {
         ),
       );
     }
-    final message = 'No ${group?.label.toLowerCase()} photos yet.';
+    final message = label != null
+        ? 'No photos with “$label” yet.'
+        : 'No ${groups!.first.label.toLowerCase()} photos yet.';
     return Center(child: Text(message));
   }
 }

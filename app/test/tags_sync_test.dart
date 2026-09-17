@@ -286,6 +286,36 @@ void main() {
     expect(index.facesFor('q-photo').single.name, 'A');
   });
 
+  test('repair keeps a coherent pair and drops the outlier', () async {
+    // Two genuine confirmations of one person plus one wrong face.
+    final a = Float32List(192)..[0] = 1;
+    final nearA = Float32List(192)
+      ..[0] = 0.98
+      ..[1] = 0.199; // very similar to a
+    final wrong = Float32List(192)..[5] = 1; // unrelated
+    await index.upsertIdentity('Aimee', a);
+    await index.upsertIdentity('Aimee', nearA);
+    await index.upsertIdentity('Aimee', wrong);
+    for (final e in [
+      entryWithFace('aimee-1', a, name: 'Aimee'),
+      entryWithFace('aimee-2', nearA, name: 'Aimee'),
+      entryWithFace('aimee-3', wrong, name: 'Aimee'),
+    ]) {
+      e.faces[0].similarity = 1.0;
+      await index.put(e);
+    }
+
+    final result = await index.repairIdentities();
+
+    expect(result.identitiesRepaired, 1);
+    expect(result.facesCleared, 1);
+    // The genuine pair survives; the unrelated face is untagged.
+    expect(index.facesFor('aimee-1').single.name, 'Aimee');
+    expect(index.facesFor('aimee-2').single.name, 'Aimee');
+    expect(index.facesFor('aimee-3').single.name, isNull);
+    expect(index.identityForName('Aimee')!.faceSamples, 2);
+  });
+
   test('ignoring a face untags and ignores it in every photo', () async {
     final alexFace = Float32List(192)..[0] = 1;
     final rileyFace = Float32List(192)..[1] = 1;

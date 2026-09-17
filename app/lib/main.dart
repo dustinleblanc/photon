@@ -1,20 +1,12 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'screens/gallery_screen.dart';
 import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
 import 'screens/settings_screen.dart';
 import 'state/app_state.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
-
-/// Desktop gets the persistent sidebar + top bar shell; mobile keeps the
-/// per-screen design.
-final bool _isDesktop =
-    Platform.isMacOS || Platform.isLinux || Platform.isWindows;
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,9 +40,7 @@ class PhotonLibraryApp extends StatelessWidget {
           AppPhase.booting =>
             const Scaffold(body: Center(child: CircularProgressIndicator())),
           AppPhase.loggedOut => LoginScreen(state: state),
-          AppPhase.ready => _isDesktop
-              ? HomeShell(state: state)
-              : GalleryScreen(state: state),
+          AppPhase.ready => HomeShell(state: state),
         };
         return MaterialApp(
           navigatorKey: navigatorKey,

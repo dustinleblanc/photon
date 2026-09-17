@@ -40,6 +40,9 @@ class DetectionIndex extends ChangeNotifier {
   /// whole library, so recomputing it on every People-page build (tab
   /// switches, scroll rebuilds) was a noticeable lag.
   Map<String, ({String linkId, Rect rect})>? _bestFacesCache;
+
+  /// Memoized distinct object labels; dropped on every index change.
+  Set<String>? _labelsCache;
   Object? _openError;
   bool _initializing = false;
 
@@ -714,8 +717,12 @@ class DetectionIndex extends ChangeNotifier {
         }
         cohesion = sum / pairs;
       }
+      // Keep a coherent cluster of as few as two confirmations: with only a
+      // handful of confirmations, a single wrong face used to drop the whole
+      // set below the "three samples" bar and wipe genuine tags as well.
+      // Now the good pair survives and only the outlier is dropped.
       final incoherent =
-          keptEmb.length < 3 || cohesion < kMinIdentityCohesion;
+          keptEmb.length < 2 || cohesion < kMinIdentityCohesion;
       if (incoherent) {
         // Clear every confirmation for this person.
         for (final s in list) {
@@ -926,6 +933,45 @@ class DetectionIndex extends ChangeNotifier {
       if (n != null && names.contains(n)) return true;
     }
     return false;
+  }
+
+  /// True when [linkId] contains an object detected as [label] (exact match).
+  bool hasLabel(String linkId, String label) {
+    final entry = lookup(linkId);
+    if (entry == null) return false;
+    for (final o in entry.objects) {
+      if (o.label == label) return true;
+    }
+    return false;
+  }
+
+  /// Distinct object labels present in the library, memoized (dropped on
+  /// every index change). Used by the search bar so a label like
+  /// "motorcycle" can surface photos without needing its own menu entry.
+  Set<String> get labels {
+    final cached = _labelsCache;
+    if (cached != null) return cached;
+    final box = _box;
+    if (box == null) return const {};
+    final out = <String>{};
+    for (final key in box.keys) {
+      final entry = lookup(key as String);
+      if (entry == null) continue;
+      for (final o in entry.objects) {
+        out.add(o.label);
+      }
+    }
+    _labelsCache = out;
+    return out;
+  }
+
+  /// Labels matching [query] (case-insensitive substring), for search.
+  List<String> searchLabels(String query) {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return const [];
+    final out = [for (final l in labels) if (l.toLowerCase().contains(q)) l]
+      ..sort();
+    return out;
   }
 
   /// True when [linkId] belongs to [group], without building a group Set.

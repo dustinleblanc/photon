@@ -59,6 +59,23 @@ Future<void> main() async {
         'intraCohesion=${pairs == 0 ? '-' : intra.toStringAsFixed(3)}');
   }
 
+  final target = Platform.environment['NAME'] ?? '';
+  if (target.isNotEmpty) {
+    stderr.writeln('--- faces named "$target" ---');
+    var n = 0;
+    for (final e in entries.values) {
+      for (var i = 0; i < e.faces.length; i++) {
+        final f = e.faces[i];
+        if (f.name?.toLowerCase() != target.toLowerCase()) continue;
+        n++;
+        stderr.writeln('  link=${e.linkId} face=$i '
+            'sim=${(f.similarity ?? -1).toStringAsFixed(3)} '
+            'ignored=${f.ignored} area=${(f.rect.width * f.rect.height).toStringAsFixed(4)}');
+      }
+    }
+    stderr.writeln('  total=$n');
+  }
+
   stderr.writeln('--- identity pairs with similar centroids (ambiguity risk) ---');
   for (var i = 0; i < ids.length; i++) {
     for (var j = i + 1; j < ids.length; j++) {

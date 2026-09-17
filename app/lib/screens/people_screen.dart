@@ -3,12 +3,14 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../ml/detection.dart';
 import '../ml/detection_index.dart';
 import '../ml/faces.dart';
 import '../platform/contacts.dart';
 import '../state/app_state.dart';
 import 'contact_picker.dart';
 import 'photo_tile.dart';
+import 'gallery_screen.dart';
 import 'person_detail_screen.dart';
 import 'unnamed_people_screen.dart';
 
@@ -271,7 +273,11 @@ class _PeopleScreenState extends State<PeopleScreen> {
           if (src != null) sources[id.name] = src;
         }
         final showUnnamed = !searching && !_selecting && unnamedCount > 0;
-        final hasContent = identities.isNotEmpty || showUnnamed;
+        final petCount = searching || _selecting
+            ? 0
+            : _index.linkIdsWithGroup(DetectionGroup.pets).length;
+        final showPets = !searching && !_selecting;
+        final hasContent = identities.isNotEmpty || showUnnamed || showPets;
 
         final shell = widget.embedded;
         return Scaffold(
@@ -352,9 +358,33 @@ class _PeopleScreenState extends State<PeopleScreen> {
                         crossAxisSpacing: 12,
                         childAspectRatio: 0.78,
                       ),
-                  itemCount: identities.length + (showUnnamed ? 1 : 0),
+                  itemCount: identities.length +
+                      (showPets ? 1 : 0) +
+                      (showUnnamed ? 1 : 0),
                   itemBuilder: (context, i) {
-                    if (i >= identities.length) {
+                    // Layout: [Pets] then people, then [Unnamed].
+                    var index = i;
+                    if (showPets) {
+                      if (index == 0) {
+                        return _PersonCard(
+                          key: const ValueKey('pets'),
+                          count: petCount,
+                          label: 'Pets',
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              settings: const RouteSettings(name: 'Pets'),
+                              builder: (_) => GalleryScreen(
+                                state: widget.state,
+                                embedded: true,
+                                groups: const {DetectionGroup.pets},
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+                      index -= 1;
+                    }
+                    if (index >= identities.length) {
                       return _PersonCard(
                         key: const ValueKey('unnamed'),
                         count: unnamedCount,
@@ -367,7 +397,7 @@ class _PeopleScreenState extends State<PeopleScreen> {
                         ),
                       );
                     }
-                    final id = identities[i];
+                    final id = identities[index];
                     return _PersonCard(
                       key: ValueKey(
                         '${id.name}:${sources[id.name]?.linkId ?? '-'}',
