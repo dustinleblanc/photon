@@ -181,10 +181,13 @@ class LibraryScanner extends ChangeNotifier {
           if (isIllustration == null) continue;
           if (isIllustration) _illustrationsFound++;
           if (isIllustration) {
-            // Keep manual tags, drop auto-assigned ones.
+            // Illustrations contribute no faces to matching: drop every
+            // auto/unnamed face, keeping only tags the user confirmed by
+            // hand. (Previously unnamed faces were kept, which is why
+            // cartoons kept showing up in the unnamed worklist.)
             final kept = [
               for (final f in existing.faces)
-                if (f.name == null || (f.similarity ?? 0) >= 1.0) f,
+                if ((f.similarity ?? 0) >= 1.0) f,
             ];
             await _index.put(existing.copyWith(
               illustration: true,
@@ -192,9 +195,14 @@ class LibraryScanner extends ChangeNotifier {
               faces: kept,
             ));
           } else {
+            // Not an illustration as a whole, but it may still hold drawn
+            // faces (a cartoon on a screen, say). Re-check the stored faces
+            // by crop and drop the drawn ones.
+            final faces = await _withoutDrawnFaces(bytes, existing.faces);
             await _index.put(existing.copyWith(
               illustration: false,
               styleChecked: true,
+              faces: faces,
             ));
           }
         } catch (e) {

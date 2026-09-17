@@ -57,8 +57,9 @@ class SettingsScreen extends StatelessWidget {
                     leading: const Icon(Icons.refresh),
                     title: const Text('Re-classify illustrations'),
                     subtitle: const Text(
-                      'Re-check every photo (slower) after the detector is '
-                      'tuned',
+                      'Re-check every photo and drop cartoon faces from ones '
+                      'already scanned (slower). Use this to clean up an '
+                      'existing library.',
                     ),
                     enabled: !scanner.running,
                     onTap: scanner.running

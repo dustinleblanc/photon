@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../ml/detection.dart';
 import '../ml/faces.dart';
 import '../state/app_state.dart';
 import 'gallery_screen.dart';
@@ -9,13 +10,53 @@ import 'people_screen.dart';
 import 'person_detail_screen.dart';
 import 'settings_screen.dart';
 
-/// Desktop shell: a persistent left navigation rail, a persistent top bar
-/// (search, background-task progress, settings, context menu) and a nested
-/// navigator so sub-pages get a back button that returns to their section
-/// (a person page comes back to all people, settings to the section it came
-/// from, and so on).
-///
-/// Mobile keeps the existing per-screen design; this is chosen in main().
+/// One navigation destination. Photos/People/Settings are their own screens;
+/// Pets/Objects/Illustrations are the gallery filtered to that group. The
+/// same list renders as the sidebar on desktop and the bottom bar on mobile,
+/// so the app has one navigation model everywhere.
+class _Dest {
+  const _Dest(
+    this.label,
+    this.icon,
+    this.selectedIcon, {
+    this.groups,
+    this.people = false,
+    this.settings = false,
+  });
+
+  final String label;
+  final IconData icon;
+  final IconData selectedIcon;
+
+  /// Detection groups this destination filters the gallery to, or null for
+  /// everything. Objects have no menu entry on purpose: the detector still
+  /// classifies them and the search bar surfaces them by name.
+  final Set<DetectionGroup>? groups;
+  final bool people;
+  final bool settings;
+}
+
+const List<_Dest> _dests = [
+  _Dest('Photos', Icons.grid_view_outlined, Icons.grid_view),
+  _Dest(
+    'People & Pets',
+    Icons.people_outline,
+    Icons.people,
+    people: true,
+  ),
+  _Dest(
+    'Illustrations',
+    Icons.brush_outlined,
+    Icons.brush,
+    groups: {DetectionGroup.illustrations},
+  ),
+  _Dest('Settings', Icons.settings_outlined, Icons.settings, settings: true),
+];
+
+/// App shell: one navigation menu (left rail on desktop, bottom bar on
+/// mobile), a persistent top bar with search and a per-screen "…" context
+/// menu, and a nested navigator so sub-pages (a person, settings) get a back
+/// button to their section.
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key, required this.state});
 
@@ -110,6 +151,16 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
+  /// Opens the photos containing a detected object label (from search).
+  void _openLabel(String label) {
+    _search.clear();
+    _searchFocus.unfocus();
+    _push(
+      GalleryScreen(state: widget.state, embedded: true, label: label),
+      title: label,
+    );
+  }
+
   bool _preparingScan = false;
 
   /// Scans the entire library (not just the pages loaded into the gallery).
@@ -136,13 +187,6 @@ class _HomeShellState extends State<HomeShell> {
     }
   }
 
-  Future<void> _openSettings() async {
-    _push(
-      SettingsScreen(state: widget.state, embedded: true),
-      title: 'Settings',
-    );
-  }
-
   /// Turns a route change into top-bar state: whether Back is available and
   /// what the current page is called. The observer also fires while the
   /// Navigator is still building its first route, where calling setState
@@ -164,76 +208,101 @@ class _HomeShellState extends State<HomeShell> {
     });
   }
 
-  String get _sectionTitle =>
-      switch (_section) { 0 => 'Library', 1 => 'People', _ => 'Photon Library' };
+  String get _sectionTitle => _dests[_section].label;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Row(
-        children: [
-          NavigationRail(
-            selectedIndex: _section,
-            onDestinationSelected: _selectSection,
-            labelType: NavigationRailLabelType.all,
-            leading: const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
-              child: Icon(Icons.photo_library, size: 28),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 720;
+        final main = Column(
+          children: [
+            _TopBar(
+              state: widget.state,
+              title: _pushedTitle ?? _sectionTitle,
+              canPop: _canPop,
+              onBack: () => _navigator.currentState?.pop(),
+              onScan: _toggleScan,
+              scanPreparing: _preparingScan,
+              search: _search,
+              searchFocus: _searchFocus,
+              onOpenPerson: _openPerson,
+              onOpenLabel: _openLabel,
             ),
-            destinations: const [
-              NavigationRailDestination(
-                icon: Icon(Icons.grid_view_outlined),
-                selectedIcon: Icon(Icons.grid_view),
-                label: Text('Library'),
+            const Divider(height: 1),
+            Expanded(
+              child: Navigator(
+                key: _navigator,
+                // Every base route is named so the top bar can label it.
+                observers: [_ShellObserver(_onRouteChanged)],
+                onGenerateRoute: (settings) => MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => _sectionBody(),
+                ),
               ),
-              NavigationRailDestination(
-                icon: Icon(Icons.people_outline),
-                selectedIcon: Icon(Icons.people),
-                label: Text('People'),
-              ),
-            ],
-          ),
-          const VerticalDivider(width: 1),
-          Expanded(
-            child: Column(
+            ),
+          ],
+        );
+        if (wide) {
+          return Scaffold(
+            body: Row(
               children: [
-                _TopBar(
-                  state: widget.state,
-                  title: _pushedTitle ?? _sectionTitle,
-                  canPop: _canPop,
-                  onBack: () => _navigator.currentState?.pop(),
-                  onScan: _toggleScan,
-                  scanPreparing: _preparingScan,
-                  search: _search,
-                  searchFocus: _searchFocus,
-                  onOpenPerson: _openPerson,
-                  onOpenSettings: _openSettings,
-                ),
-                const Divider(height: 1),
-                Expanded(
-                  child: Navigator(
-                    key: _navigator,
-                    // Every base route is named so the top bar can label it.
-                    observers: [_ShellObserver(_onRouteChanged)],
-                    onGenerateRoute: (settings) => MaterialPageRoute(
-                      settings: settings,
-                      builder: (_) => _sectionBody(),
-                    ),
+                NavigationRail(
+                  selectedIndex: _section,
+                  onDestinationSelected: _selectSection,
+                  labelType: NavigationRailLabelType.all,
+                  leading: const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                    child: Icon(Icons.photo_library, size: 28),
                   ),
+                  destinations: [
+                    for (final d in _dests)
+                      NavigationRailDestination(
+                        icon: Icon(d.icon),
+                        selectedIcon: Icon(d.selectedIcon),
+                        label: Text(d.label),
+                      ),
+                  ],
                 ),
+                const VerticalDivider(width: 1),
+                Expanded(child: main),
               ],
             ),
+          );
+        }
+        return Scaffold(
+          body: main,
+          bottomNavigationBar: NavigationBar(
+            selectedIndex: _section,
+            onDestinationSelected: _selectSection,
+            labelBehavior:
+                NavigationDestinationLabelBehavior.onlyShowSelected,
+            destinations: [
+              for (final d in _dests)
+                NavigationDestination(
+                  icon: Icon(d.icon),
+                  selectedIcon: Icon(d.selectedIcon),
+                  label: d.label,
+                ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
-  Widget _sectionBody() => switch (_section) {
-        0 => GalleryScreen(state: widget.state, embedded: true),
-        1 => PeopleScreen(state: widget.state, embedded: true),
-        _ => GalleryScreen(state: widget.state, embedded: true),
-      };
+  Widget _sectionBody() {
+    final dest = _dests[_section];
+    if (dest.people) return PeopleScreen(state: widget.state, embedded: true);
+    if (dest.settings) {
+      return SettingsScreen(state: widget.state, embedded: true);
+    }
+    return GalleryScreen(
+      state: widget.state,
+      embedded: true,
+      groups: dest.groups,
+    );
+  }
 }
 
 class _ShellObserver extends NavigatorObserver {
@@ -265,7 +334,7 @@ class _TopBar extends StatelessWidget {
     required this.search,
     required this.searchFocus,
     required this.onOpenPerson,
-    required this.onOpenSettings,
+    required this.onOpenLabel,
   });
 
   final AppState state;
@@ -277,7 +346,7 @@ class _TopBar extends StatelessWidget {
   final TextEditingController search;
   final FocusNode searchFocus;
   final ValueChanged<String> onOpenPerson;
-  final VoidCallback onOpenSettings;
+  final ValueChanged<String> onOpenLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -313,6 +382,7 @@ class _TopBar extends StatelessWidget {
                     controller: search,
                     focusNode: searchFocus,
                     onSelected: onOpenPerson,
+                    onOpenLabel: onOpenLabel,
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -346,11 +416,6 @@ class _TopBar extends StatelessWidget {
                       ),
                     );
                   },
-                ),
-                IconButton(
-                  tooltip: 'Settings',
-                  icon: const Icon(Icons.settings_outlined),
-                  onPressed: onOpenSettings,
                 ),
                 PopupMenuButton<String>(
                   tooltip: 'Menu',
@@ -421,40 +486,49 @@ class _TopBar extends StatelessWidget {
 
 /// Top-bar search over people: type a name (or alias), pick a match, and the
 /// person's page opens.
+/// Search across everything the index knows: people (by name or alias) and
+/// detected object labels. Picking a person opens their page; picking a label
+/// opens the photos containing it — so "motorcycle" works without a menu
+/// entry for objects.
 class _PeopleSearch extends StatelessWidget {
   const _PeopleSearch({
     required this.state,
     required this.controller,
     required this.focusNode,
     required this.onSelected,
+    required this.onOpenLabel,
   });
 
   final AppState state;
   final TextEditingController controller;
   final FocusNode focusNode;
   final ValueChanged<String> onSelected;
+  final ValueChanged<String> onOpenLabel;
 
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: state.detectionIndex,
-      builder: (context, _) => RawAutocomplete<PersonIdentity>(
+      builder: (context, _) => RawAutocomplete<Object>(
         textEditingController: controller,
         focusNode: focusNode,
-        displayStringForOption: (id) => id.name,
+        displayStringForOption: (o) =>
+            o is PersonIdentity ? o.name : o.toString(),
         optionsBuilder: (value) {
-          final q = value.text.trim().toLowerCase();
-          if (q.isEmpty) return const <PersonIdentity>[];
+          final q = value.text.trim();
+          if (q.isEmpty) return const <Object>[];
+          final lower = q.toLowerCase();
           return [
             for (final id in state.detectionIndex.identities)
-              if (id.allNames.any((n) => n.toLowerCase().contains(q))) id,
+              if (id.allNames.any((n) => n.toLowerCase().contains(lower))) id,
+            ...state.detectionIndex.searchLabels(q),
           ];
         },
         fieldViewBuilder: (context, c, f, _) => TextField(
           controller: c,
           focusNode: f,
           decoration: InputDecoration(
-            hintText: 'Search people…',
+            hintText: 'Search people or things…',
             prefixIcon: const Icon(Icons.search, size: 20),
             isDense: true,
             filled: true,
@@ -482,22 +556,33 @@ class _PeopleSearch extends StatelessWidget {
                 shrinkWrap: true,
                 padding: EdgeInsets.zero,
                 children: [
-                  for (final id in options)
-                    ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.person, size: 18),
-                      title: Text(id.name),
-                      subtitle: id.aliases.isEmpty
-                          ? null
-                          : Text(id.aliases.join(', ')),
-                      onTap: () => onSelectedOption(id),
-                    ),
+                  for (final o in options)
+                    if (o is PersonIdentity)
+                      ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.person, size: 18),
+                        title: Text(o.name),
+                        subtitle: o.aliases.isEmpty
+                            ? null
+                            : Text(o.aliases.join(', ')),
+                        onTap: () => onSelectedOption(o),
+                      )
+                    else
+                      ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.category_outlined, size: 18),
+                        title: Text(o.toString()),
+                        subtitle: const Text('Photos with this'),
+                        onTap: () => onSelectedOption(o),
+                      ),
                 ],
               ),
             ),
           ),
         ),
-        onSelected: (id) => onSelected(id.name),
+        onSelected: (o) => o is PersonIdentity
+            ? onSelected(o.name)
+            : onOpenLabel(o.toString()),
       ),
     );
   }

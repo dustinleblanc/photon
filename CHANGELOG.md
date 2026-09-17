@@ -5,7 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.11.0] - 2026-09-17
+
+### Added
+
+- Unified navigation: one menu rendered as a left rail on desktop and a bottom
+  bar on mobile — Photos, **People & Pets** (combined), Illustrations, and
+  Settings (the gear moved into the menu). The gallery chip bar is gone.
+- Search now covers people *and* detected objects: typing a label such as
+  "motorcycle" offers "Photos with this" and opens those photos, so objects
+  don't need a menu entry even though the detector still classifies them.
+- "Re-classify illustrations" now also **purges already-stored cartoon
+  faces**: it re-checks each photo's faces by crop and drops the drawn ones,
+  and a photo re-classified as an illustration keeps only hand-confirmed tags
+  (previously unnamed cartoon faces stayed in the worklist).
+
+### Fixed
+
+- RangeError on the People page (`identities[-1]`) when the Pets tile was
+  present — the grid's Pets/people/Unnamed offsets were inconsistent.
+- "Repair people profiles" could wipe genuine confirmations: an identity whose
+  coherent cluster was under three samples was cleared entirely, losing the
+  real ones along with the bad. It now keeps a coherent pair and drops only
+  the outlier.
 
 ### Added
 
