@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -11,9 +10,13 @@ import '../ml/library_scanner.dart';
 import '../state/app_state.dart';
 import 'lightbox_screen.dart';
 import 'people_screen.dart';
+import 'photo_tile.dart';
 import 'settings_screen.dart';
 class GalleryScreen extends StatefulWidget {
-  const GalleryScreen({super.key, required this.state});
+  const GalleryScreen({super.key, required this.state, this.embedded = false});
+
+  /// True when hosted inside the desktop shell, which supplies the app bar.
+  final bool embedded;
 
   final AppState state;
 
@@ -24,7 +27,6 @@ class GalleryScreen extends StatefulWidget {
 class _GalleryScreenState extends State<GalleryScreen> {
   final _scroll = ScrollController();
   DetectionGroup? _filter;
-  String? _personName;
   bool _preparingScan = false;
 
   @override
@@ -74,17 +76,10 @@ class _GalleryScreenState extends State<GalleryScreen> {
     final index = state.detectionIndex;
     final scanner = state.detector;
     return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        title: Text(_personName ?? 'Photon Library'),
-        leading: _personName != null
-            ? BackButton(
-                onPressed: () => setState(() {
-                  _filter = null;
-                  _personName = null;
-                }),
-              )
-            : null,
+      appBar: widget.embedded
+          ? null
+          : AppBar(
+        title: const Text('Photon Library'),
         actions: [
           ListenableBuilder(
             listenable: scanner,
@@ -128,10 +123,14 @@ class _GalleryScreenState extends State<GalleryScreen> {
           if (photos.isEmpty) {
             return const Center(child: Text('No photos yet.'));
           }
+          _loadRemainingForFilter();
 
+          // Computed once per build: the hidden set is the same for every
+          // photo, and asking per photo re-decoded every identity.
+          final hidden = index.hiddenNames;
           final filtered = [
             for (final p in photos)
-              if (_matches(index, p.linkId)) p,
+              if (_matches(index, p.linkId, hidden)) p,
           ];
 
           return Column(
@@ -146,23 +145,16 @@ class _GalleryScreenState extends State<GalleryScreen> {
               ),
               _FilterBar(
                 selected: _filter,
-                personName: _personName,
                 scannedCount: index.scannedCount,
-                onSelected: (g) => setState(() {
-                  _filter = g;
-                  _personName = null;
-                }),
+                onSelected: (g) => setState(() => _filter = g),
                 onPeople: _showPeopleSheet,
               ),
               Expanded(
                 child: filtered.isEmpty
                     ? _EmptyFilter(
                         group: _filter,
-                        personName: _personName,
-                                scannedCount: index.scannedCount,
-                        onScan: _filter == null && _personName == null
-                            ? null
-                            : _toggleScan,
+                        scannedCount: index.scannedCount,
+                        onScan: _filter == null ? null : _toggleScan,
                       )
                     : GridView.builder(
                         controller: _scroll,
@@ -191,7 +183,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
                             );
                           }
                           final photo = filtered[i];
-                          return _PhotoTile(
+                          return PhotoTile(
                             state: state,
                             linkId: photo.linkId,
                             onTap: () => _openLightbox(photo),
@@ -206,30 +198,39 @@ class _GalleryScreenState extends State<GalleryScreen> {
     );
   }
 
-  bool _matches(DetectionIndex index, String linkId) {
-    if (_personName != null) return index.peopleFor(linkId).contains(_personName);
-    if (_filter != null) return index.groupsFor(linkId).contains(_filter);
+  bool _matches(DetectionIndex index, String linkId, Set<String> hidden) {
+    // Hidden people are kept out of the unfiltered and group views, so their
+    // photos don't get surfaced unasked.
+    if (index.hasAnyPerson(linkId, hidden)) return false;
+    if (_filter != null) return index.hasGroup(linkId, _filter!);
     return true;
   }
 
-  Future<void> _showPeopleSheet() async {
-    // Refresh from other devices before showing, so newly tagged people
-    // from the phone are already here.
-    unawaited(widget.state.tagsSync.pullAndPush());
-    final selection = await Navigator.of(context).push<PeopleSelection>(
+  /// Filters run over the loaded photo list, so while the library is only
+  /// partially loaded a filtered grid undercounts (the People tile counts
+  /// from the full index) and — with too few matches to scroll — never
+  /// triggers the pagination listener, leaving a spinner forever. Whenever a
+  /// filter is active and pages remain, keep fetching in the background.
+  void _loadRemainingForFilter() {
+    if (_filter == null || !widget.state.hasMore || widget.state.loading) {
+      return;
+    }
+    unawaited(
+      widget.state.loadAll().catchError((_) {}),
+    );
+  }
+
+  Future<void> _showPeopleSheet() {
+    // The People page now owns per-person filtering and actions.
+    return Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => PeopleScreen(state: widget.state)),
     );
-    if (selection == null || !mounted) return;
-    setState(() {
-      _filter = null;
-      _personName = selection.name;
-    });
   }
 
   void _openLightbox(Photo photo) {
     final index =
         widget.state.photos.indexWhere((p) => p.linkId == photo.linkId);
-    Navigator.of(context).push(
+    Navigator.of(context, rootNavigator: true).push(
       MaterialPageRoute(
         builder: (_) => LightboxScreen(
           state: widget.state,
@@ -275,21 +276,19 @@ class _ScanProgress extends StatelessWidget {
 class _FilterBar extends StatelessWidget {
   const _FilterBar({
     required this.selected,
-    required this.personName,
     required this.scannedCount,
     required this.onSelected,
     required this.onPeople,
   });
 
   final DetectionGroup? selected;
-  final String? personName;
   final int scannedCount;
   final ValueChanged<DetectionGroup?> onSelected;
   final VoidCallback onPeople;
 
   @override
   Widget build(BuildContext context) {
-    final personActive = personName != null;
+    const personActive = false;
     final chips = <Widget>[
       Padding(
         padding: const EdgeInsets.only(left: 12),
@@ -304,7 +303,7 @@ class _FilterBar extends StatelessWidget {
         child: FilterChip(
           avatar: const Icon(Icons.face, size: 18),
           label: Text(
-            personName ?? 'People',
+            'People',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -336,93 +335,21 @@ class _FilterBar extends StatelessWidget {
   }
 }
 
-class _PhotoTile extends StatefulWidget {
-  const _PhotoTile({
-    required this.state,
-    required this.linkId,
-    required this.onTap,
-  });
-
-  final AppState state;
-  final String linkId;
-  final VoidCallback onTap;
-
-  @override
-  State<_PhotoTile> createState() => _PhotoTileState();
-}
-
-class _PhotoTileState extends State<_PhotoTile> {
-  // Memoized so rebuilds (e.g. scan progress) reuse the same future and the
-  // FutureBuilder doesn't reset to its placeholder and flash.
-  late Future<Uint8List> _preview;
-
-  @override
-  void initState() {
-    super.initState();
-    _preview = widget.state.preview(widget.linkId);
-  }
-
-  @override
-  void didUpdateWidget(covariant _PhotoTile oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.linkId != widget.linkId || oldWidget.state != widget.state) {
-      _preview = widget.state.preview(widget.linkId);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: widget.onTap,
-      child: FutureBuilder(
-        future: _preview,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.done &&
-              snapshot.hasData) {
-            return Image.memory(
-              snapshot.data!,
-              fit: BoxFit.cover,
-              gaplessPlayback: true,
-            );
-          }
-          final theme = Theme.of(context);
-          return Container(
-            color: theme.colorScheme.surfaceContainerHighest,
-            child: Center(
-              child: snapshot.hasError
-                  ? Icon(
-                      Icons.broken_image_outlined,
-                      color: theme.colorScheme.outline,
-                    )
-                  : const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
 
 class _EmptyFilter extends StatelessWidget {
   const _EmptyFilter({
     this.group,
-    this.personName,
     required this.scannedCount,
     required this.onScan,
   });
 
   final DetectionGroup? group;
-  final String? personName;
   final int scannedCount;
   final VoidCallback? onScan;
 
   @override
   Widget build(BuildContext context) {
-    if (scannedCount == 0 && (group != null || personName != null)) {
+    if (scannedCount == 0 && group != null) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -438,9 +365,7 @@ class _EmptyFilter extends StatelessWidget {
         ),
       );
     }
-    final message = personName != null
-        ? 'No photos of $personName yet.'
-        : 'No ${group?.label.toLowerCase()} photos yet.';
+    final message = 'No ${group?.label.toLowerCase()} photos yet.';
     return Center(child: Text(message));
   }
 }

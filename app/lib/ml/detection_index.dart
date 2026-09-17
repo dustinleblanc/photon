@@ -20,6 +20,20 @@ class DetectionIndex extends ChangeNotifier {
 
   Box<Map>? _box;
   Box<Map>? _identitiesBox;
+  /// Decoded-entry cache. lookup() is called per photo on every gallery
+  /// rebuild, and DetectedEntry.fromMap decodes embeddings; without this,
+  /// rebuilds during a scan (which notifies per photo) re-decode the whole
+  /// library repeatedly and the UI crawls.
+  final Map<String, DetectedEntry> _entryCache = {};
+
+  /// Decoded-identity cache. The gallery asks for the hidden-person set per
+  /// photo while filtering, which would otherwise re-decode every identity
+  /// thousands of times per rebuild. Cleared on every notify (see [_notify]),
+  /// so it can never go stale.
+  List<PersonIdentity>? _identitiesCache;
+
+  /// Memoized [countPeople] result; dropped on every index change.
+  Map<String, int>? _peopleCounts;
   Object? _openError;
   bool _initializing = false;
 
@@ -50,7 +64,7 @@ class DetectionIndex extends ChangeNotifier {
       _openError = e;
     } finally {
       _initializing = false;
-      notifyListeners();
+      _notify();
     }
   }
 
@@ -63,9 +77,10 @@ class DetectionIndex extends ChangeNotifier {
   Future<void> reconcileAutoAssignedNames() async {
     final box = _box;
     if (box == null) return;
-    final ids = identities;
+    if (identities.isEmpty) return;
+    final matcher = faceMatcher();
     var changed = false;
-    for (final key in box.keys) {
+    for (final key in box.keys.toList()) {
       final entry = lookup(key as String);
       if (entry == null) continue;
       final needsCheck = entry.faces.any(
@@ -75,39 +90,47 @@ class DetectionIndex extends ChangeNotifier {
             (f.similarity == null || f.similarity! < 1.0),
       );
       if (!needsCheck) continue;
-      await box.put(
-        entry.linkId,
-        DetectedEntry(
-          linkId: entry.linkId,
-          modelVersion: entry.modelVersion,
-          detectedAt: entry.detectedAt,
-          objects: entry.objects,
+      await _writeEntry(
+        entry.copyWith(
           faces: [
             for (final f in entry.faces)
               if (f.name != null &&
                   !f.ignored &&
                   (f.similarity == null || f.similarity! < 1.0))
                 () {
-                  final resolved = ids.isEmpty
-                      ? null
-                      : matchIdentity(f.embedding, identities: ids);
-                  if (resolved == f.name) {
+                  final resolved = matcher.match(f.embedding);
+                  final autoMatchable = _isAutoMatchable(f);
+                  if (resolved == f.name && autoMatchable) {
                     return f;
                   }
                   changed = true;
+                  if (resolved == null || !autoMatchable) {
+                    return DetectedFace(
+                      rect: f.rect,
+                      embedding: f.embedding,
+                      ignored: f.ignored,
+                    );
+                  }
+                  // The rules changed since this tag was written; reassign
+                  // to whoever matches now instead of just clearing.
                   return DetectedFace(
                     rect: f.rect,
                     embedding: f.embedding,
+                    name: resolved,
+                    similarity: matcher.scoreFor(
+                      f.embedding,
+                      matcher.identityFor(resolved),
+                    ),
                     ignored: f.ignored,
                   );
                 }()
               else
                 f,
           ],
-        ).toMap(),
+        ),
       );
     }
-    if (changed) notifyListeners();
+    if (changed) _notify();
   }
 
   /// Rebuilds centroids and sample counts that were corrupted. A bad sync
@@ -128,7 +151,7 @@ class DetectionIndex extends ChangeNotifier {
     final manual = <String, List<Float32List>>{};
     final box = _box;
     if (box != null) {
-      for (final key in box.keys) {
+      for (final key in box.keys.toList()) {
         final entry = lookup(key as String);
         if (entry == null) continue;
         for (final f in entry.faces) {
@@ -166,7 +189,7 @@ class DetectionIndex extends ChangeNotifier {
         for (var i = 0; i < length; i++) {
           rebuilt[i] /= faces.length;
         }
-        await idBox.put(
+        await _putIdentity(
           key,
           PersonIdentity(
             name: name,
@@ -178,11 +201,13 @@ class DetectionIndex extends ChangeNotifier {
             contactId: map['contactId'] as String?,
             contactDisplayName: map['contactDisplayName'] as String?,
             contactPhotoUri: map['contactPhotoUri'] as String?,
-          ).toMap(),
+            coverLinkId: map['coverLinkId'] as String?,
+            hidden: map['hidden'] as bool? ?? false,
+          ),
         );
         changed = true;
       } else if (samplesBad) {
-        await idBox.put(
+        await _putIdentity(
           key,
           PersonIdentity(
             name: name,
@@ -196,29 +221,64 @@ class DetectionIndex extends ChangeNotifier {
             contactId: map['contactId'] as String?,
             contactDisplayName: map['contactDisplayName'] as String?,
             contactPhotoUri: map['contactPhotoUri'] as String?,
-          ).toMap(),
+            coverLinkId: map['coverLinkId'] as String?,
+            hidden: map['hidden'] as bool? ?? false,
+          ),
         );
         changed = true;
       }
     }
-    if (changed) notifyListeners();
+    if (changed) _notify();
   }
 
   DetectedEntry? lookup(String linkId) {
+    final cached = _entryCache[linkId];
+    if (cached != null) return cached;
     final raw = _box?.get(linkId);
     if (raw == null) return null;
     try {
       final entry = DetectedEntry.fromMap(linkId, raw.cast<String, dynamic>());
       if (entry.modelVersion != DetectorService.modelVersion) return null;
+      _entryCache[linkId] = entry;
       return entry;
     } catch (_) {
       return null;
     }
   }
 
+  /// Notify listeners, dropping the identity cache first so a rebuild always
+  /// sees current data. Every mutation path calls this (directly or via
+  /// put/notifyListeners).
+  void _notify() {
+    _identitiesCache = null;
+    _peopleCounts = null;
+    notifyListeners();
+  }
+
+  /// Identity write that invalidates the decoded-identity cache. Used instead
+  /// of touching the identities box directly, so the cache can't go stale
+  /// even when a write happens without an immediate notify.
+  Future<void> _putIdentity(String key, PersonIdentity id) async {
+    await _identitiesBox?.put(key, id.toMap());
+    _identitiesCache = null;
+  }
+
+  Future<void> _deleteIdentity(String key) async {
+    await _identitiesBox?.delete(key);
+    _identitiesCache = null;
+  }
+
   Future<void> put(DetectedEntry entry) async {
     await _box?.put(entry.linkId, entry.toMap());
-    notifyListeners();
+    _entryCache[entry.linkId] = entry;
+    _notify();
+  }
+
+  /// Raw write that keeps the decode cache coherent. Used by the batch
+  /// rewrite paths that defer their notifyListeners to the end.
+  Future<void> _writeEntry(DetectedEntry entry) async {
+    await _box?.put(entry.linkId, entry.toMap());
+    _entryCache[entry.linkId] = entry;
   }
 
   /// The distinct labels found across all scanned photos.
@@ -246,7 +306,18 @@ class DetectionIndex extends ChangeNotifier {
 
   /// True when the photo has at least one detected but unnamed face.
   bool hasUnnamedFace(String linkId) =>
-      facesFor(linkId).any((f) => f.name == null && !f.ignored);
+      facesFor(linkId).any(_isUnnamedWorkable);
+
+  /// A face counts as unnamed work when it has no name, isn't ignored, and
+  /// is big enough to plausibly be a subject rather than background crowd
+  /// (tiny faces are handled through the photo's People panel instead).
+  bool _isUnnamedWorkable(DetectedFace f) =>
+      f.name == null && !f.ignored && _isAutoMatchable(f);
+
+  /// Faces this size or larger are eligible for automatic naming; smaller
+  /// ones are background crowd and are named only by hand.
+  bool _isAutoMatchable(DetectedFace f) =>
+      f.rect.width * f.rect.height >= kMinAutoFaceArea;
 
   int get scannedCount => _box?.length ?? 0;
 
@@ -269,7 +340,7 @@ class DetectionIndex extends ChangeNotifier {
     final box = _box;
     if (box == null) return const {};
     final best = <String, ({String linkId, Rect rect, double area, double sim})>{};
-    for (final key in box.keys) {
+    for (final key in box.keys.toList()) {
       final entry = lookup(key as String);
       if (entry == null) continue;
       for (final f in entry.faces) {
@@ -298,12 +369,12 @@ class DetectionIndex extends ChangeNotifier {
     final box = _box;
     if (box == null) return const [];
     final out = <({String linkId, int faceIndex, Rect rect})>[];
-    for (final key in box.keys) {
+    for (final key in box.keys.toList()) {
       final entry = lookup(key as String);
-      if (entry == null) continue;
+      if (entry == null || entry.illustration) continue;
       for (var i = 0; i < entry.faces.length; i++) {
         final f = entry.faces[i];
-        if (f.name == null && !f.ignored) {
+        if (_isUnnamedWorkable(f)) {
           out.add((linkId: key, faceIndex: i, rect: f.rect));
         }
       }
@@ -314,25 +385,79 @@ class DetectionIndex extends ChangeNotifier {
   /// Marks the face at [faceIndex] of [linkId] as ignored: it stops counting
   /// as unnamed and drops out of the unnamed-people worklist. The embedding
   /// is kept so the face can still be named later from the photo's panel.
-  Future<void> ignoreFace(String linkId, int faceIndex) async {    final entry = lookup(linkId);
-    if (entry == null || faceIndex < 0 || faceIndex >= entry.faces.length) {
-      return;
+  /// Marks or unmarks a photo as an illustration by hand, overriding the
+  /// image heuristic. Marking drops auto-assigned faces (manual tags stay)
+  /// and excludes the photo from face matching; unmarking makes it eligible
+  /// again.
+  Future<void> setIllustration(String linkId, bool illustration) async {
+    final entry = lookup(linkId);
+    if (entry == null) return;
+    final faces = illustration
+        ? [
+            for (final f in entry.faces)
+              if (f.name == null || (f.similarity ?? 0) >= 1.0) f,
+          ]
+        : entry.faces;
+    await put(entry.copyWith(
+      illustration: illustration,
+      styleChecked: true,
+      faces: faces,
+    ));
+  }
+
+  /// Ignores this face *wherever it appears*: every stored face whose
+  /// embedding matches it within [threshold] is marked ignored and any tag
+  /// (auto or manual) is dropped, so a person wrongly matched to a face is
+  /// removed from all their photos at once and the face stops appearing as
+  /// unnamed work. Returns how many faces were ignored.
+  Future<int> ignoreFaceEverywhere(
+    String linkId,
+    int faceIndex, {
+    double threshold = kDefaultFaceMatchThreshold,
+  }) async {
+    final box = _box;
+    final source = lookup(linkId)?.faces;
+    if (box == null ||
+        source == null ||
+        faceIndex < 0 ||
+        faceIndex >= source.length) {
+      return 0;
     }
-    final f = entry.faces[faceIndex];
-    entry.faces[faceIndex] = DetectedFace(
-      rect: f.rect,
-      embedding: f.embedding,
-      name: f.name,
-      similarity: f.similarity,
-      ignored: true,
-    );
-    await put(entry);
+    final target = source[faceIndex].embedding;
+    if (target.isEmpty) return 0;
+    var count = 0;
+    for (final key in box.keys.toList()) {
+      final entry = lookup(key as String);
+      if (entry == null) continue;
+      var changed = false;
+      final faces = [
+        for (final f in entry.faces)
+          if (!f.ignored &&
+              f.embedding.isNotEmpty &&
+              faceMatchScore(f.embedding, target) >= threshold)
+            () {
+              changed = true;
+              count++;
+              return DetectedFace(
+                rect: f.rect,
+                embedding: f.embedding,
+                ignored: true,
+              );
+            }()
+          else
+            f,
+      ];
+      if (changed) await _writeEntry(entry.copyWith(faces: faces));
+    }
+    _notify();
+    return count;
   }
 
   Future<void> clear() async {
     await _box?.clear();
     await _identitiesBox?.clear();
-    notifyListeners();
+    _entryCache.clear();
+    _notify();
   }
 
   // ---------------------------------------------------------------------------
@@ -341,13 +466,335 @@ class DetectionIndex extends ChangeNotifier {
 
   /// All named identities, sorted by name.
   List<PersonIdentity> get identities {
+    final cached = _identitiesCache;
+    if (cached != null) return cached;
     final box = _identitiesBox;
     if (box == null) return const [];
     final out = [
       for (final value in box.values)
         PersonIdentity.fromMap(value.cast<String, dynamic>()),
     ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    _identitiesCache = out;
     return out;
+  }
+
+  /// Names of identities the user chose to hide from the default timeline.
+  Set<String> get hiddenNames => {
+        for (final id in identities)
+          if (id.hidden) id.name,
+      };
+
+  /// True when this photo has a named face belonging to a hidden person.
+  bool hasHiddenPerson(String linkId) =>
+      peopleFor(linkId).any(hiddenNames.contains);
+
+  /// Hides or unhides a person. Hidden people are omitted from the default
+  /// grid and People list; their photos remain reachable by explicitly
+  /// filtering on the person.
+  Future<void> setPersonHidden(String name, bool hidden) async {
+    final box = _identitiesBox;
+    if (box == null) return;
+    final existing = identityForName(name);
+    if (existing == null) return;
+    await _putIdentity(existing.name, existing.copyWith(hidden: hidden));
+    _notify();
+  }
+
+  /// Chooses the photo that represents [name] in the app. Passing null
+  /// reverts to the automatic choice (largest confirmed face).
+  Future<void> setPersonCover(String name, String? linkId) async {
+    final existing = identityForName(name);
+    if (existing == null) return;
+    final updated = PersonIdentity(
+      name: existing.name,
+      aliases: existing.aliases,
+      centroid: existing.centroid,
+      faceSamples: existing.faceSamples,
+      contactId: existing.contactId,
+      contactDisplayName: existing.contactDisplayName,
+      contactPhotoUri: existing.contactPhotoUri,
+      coverLinkId: linkId,
+      hidden: existing.hidden,
+    );
+    await _putIdentity(existing.name, updated);
+    _notify();
+  }
+
+  /// Photos in which [name] has a detected face, for the cover picker.
+  /// Largest faces first (best crops), capped so the sheet stays snappy.
+  List<String> coversFor(String name) {
+    final box = _box;
+    if (box == null) return const [];
+    final scored = <({String linkId, double area})>[];
+    for (final key in box.keys.toList()) {
+      final entry = lookup(key as String);
+      if (entry == null || entry.illustration) continue;
+      var best = 0.0;
+      for (final f in entry.faces) {
+        if (f.name != name) continue;
+        final area = f.rect.width * f.rect.height;
+        if (area > best) best = area;
+      }
+      if (best > 0) scored.add((linkId: key, area: best));
+    }
+    scored.sort((a, b) => b.area.compareTo(a.area));
+    return [for (final s in scored.take(60)) s.linkId];
+  }
+
+  /// The rect of the first face named [name] in [linkId], for rendering a
+  /// chosen cover photo. Null when the photo has no such face.
+  Rect? faceRectIn(String linkId, String name) {
+    final entry = lookup(linkId);
+    if (entry == null) return null;
+    for (final f in entry.faces) {
+      if (f.name == name) return f.rect;
+    }
+    return null;
+  }
+
+  /// Removes [name]'s tag from every face and resets the identity's centroid
+  /// so a contaminated sample set can't keep mis-matching. The identity
+  /// itself (and its aliases/contact/cover) is kept, ready to be re-taught.
+  Future<int> clearPersonFaces(String name) async {
+    final box = _box;
+    final idBox = _identitiesBox;
+    if (box == null) return 0;
+    var updated = 0;
+    for (final key in box.keys.toList()) {
+      final entry = lookup(key as String);
+      if (entry == null || !entry.faces.any((f) => f.name == name)) continue;
+      await _writeEntry(entry.copyWith(
+        faces: [
+          for (final f in entry.faces)
+            if (f.name == name)
+              DetectedFace(rect: f.rect, embedding: f.embedding, ignored: f.ignored)
+            else
+              f,
+        ],
+      ));
+      updated++;
+    }
+    final existing = identityForName(name);
+    if (idBox != null && existing != null) {
+      await _putIdentity(
+        existing.name,
+        PersonIdentity(
+          name: existing.name,
+          aliases: existing.aliases,
+          centroid: Float32List(existing.centroid.length),
+          faceSamples: 0,
+          contactId: existing.contactId,
+          contactDisplayName: existing.contactDisplayName,
+          contactPhotoUri: existing.contactPhotoUri,
+          coverLinkId: existing.coverLinkId,
+          hidden: existing.hidden,
+        ),
+      );
+    }
+    _notify();
+    return updated;
+  }
+
+  /// Repairs every identity whose confirmed samples are incoherent: keeps
+  /// the largest tight cluster around the identity's medoid, unnames the
+  /// outlier faces (they are wrong names), and rebuilds the centroid and
+  /// sample count from the kept cluster. This is what removes the
+  /// contaminated samples that caused both missed matches for the real
+  /// person and bad matches for others.
+  Future<({int identitiesRepaired, int facesCleared})> repairIdentities() async {
+    final det = _box;
+    final idBox = _identitiesBox;
+    if (det == null || idBox == null) {
+      return (identitiesRepaired: 0, facesCleared: 0);
+    }
+    // Gather manually-confirmed samples with their location.
+    final byName = <String, List<({String linkId, int index, Float32List emb})>>{};
+    for (final key in det.keys.toList()) {
+      final entry = lookup(key as String);
+      if (entry == null) continue;
+      for (var i = 0; i < entry.faces.length; i++) {
+        final f = entry.faces[i];
+        final n = f.name;
+        if (n == null || f.ignored) continue;
+        if ((f.similarity ?? 0) < 1.0) continue;
+        (byName[n] ??= []).add((linkId: entry.linkId, index: i, emb: f.embedding));
+      }
+    }
+
+    var repaired = 0;
+    var cleared = 0;
+    for (final id in identities) {
+      final list = byName[id.name];
+      if (list == null || list.length < 3) continue;
+      final keepList = coherentSamples([for (final s in list) s.emb]);
+      final keep = keepList.toSet();
+      // Is the kept cluster actually coherent? If the "confirmed" samples
+      // don't agree (a person's samples scoring ~0.38 against each other
+      // means the set is mixed), there is no trustworthy profile to build:
+      // better to clear it so the person can be re-taught from good photos.
+      final keptEmb = [for (final i in keepList) list[i].emb];
+      var cohesion = 1.0;
+      if (keptEmb.length >= 2) {
+        var sum = 0.0;
+        var pairs = 0;
+        for (var i = 0; i < keptEmb.length; i++) {
+          for (var j = i + 1; j < keptEmb.length; j++) {
+            sum += faceMatchScore(keptEmb[i], keptEmb[j]);
+            pairs++;
+          }
+        }
+        cohesion = sum / pairs;
+      }
+      final incoherent =
+          keptEmb.length < 3 || cohesion < kMinIdentityCohesion;
+      if (incoherent) {
+        // Clear every confirmation for this person.
+        for (final s in list) {
+          final entry = lookup(s.linkId);
+          if (entry == null) continue;
+          await _writeEntry(entry.copyWith(
+            faces: [
+              for (var i = 0; i < entry.faces.length; i++)
+                if (i == s.index)
+                  DetectedFace(
+                    rect: entry.faces[i].rect,
+                    embedding: entry.faces[i].embedding,
+                    ignored: entry.faces[i].ignored,
+                  )
+                else
+                  entry.faces[i],
+            ],
+          ));
+        }
+        cleared += list.length;
+        await _putIdentity(
+          id.name,
+          PersonIdentity(
+            name: id.name,
+            aliases: id.aliases,
+            centroid: Float32List(id.centroid.length),
+            faceSamples: 0,
+            contactId: id.contactId,
+            contactDisplayName: id.contactDisplayName,
+            contactPhotoUri: id.contactPhotoUri,
+            coverLinkId: id.coverLinkId,
+            hidden: id.hidden,
+          ),
+        );
+        repaired++;
+        continue;
+      }
+      final dropped = [
+        for (var i = 0; i < list.length; i++)
+          if (!keep.contains(i)) list[i],
+      ];
+      if (dropped.isEmpty && keep.length == list.length) continue;
+
+      // Unname the outliers, entry by entry.
+      final byLink = <String, List<int>>{};
+      for (final d in dropped) {
+        (byLink[d.linkId] ??= []).add(d.index);
+      }
+      for (final e in byLink.entries) {
+        final entry = lookup(e.key);
+        if (entry == null) continue;
+        final drop = e.value.toSet();
+        await _writeEntry(entry.copyWith(
+          faces: [
+            for (var i = 0; i < entry.faces.length; i++)
+              if (drop.contains(i))
+                DetectedFace(
+                  rect: entry.faces[i].rect,
+                  embedding: entry.faces[i].embedding,
+                  ignored: entry.faces[i].ignored,
+                )
+              else
+                entry.faces[i],
+          ],
+        ));
+        cleared += drop.length;
+      }
+
+      // Rebuild the centroid from the kept cluster.
+      final centroid = Float32List(id.centroid.length);
+      var kept = 0;
+      for (var i = 0; i < list.length; i++) {
+        if (!keep.contains(i)) continue;
+        kept++;
+        for (var j = 0; j < centroid.length; j++) {
+          centroid[j] += list[i].emb[j];
+        }
+      }
+      if (kept > 0) {
+        for (var j = 0; j < centroid.length; j++) {
+          centroid[j] /= kept;
+        }
+      }
+      await _putIdentity(
+        id.name,
+        PersonIdentity(
+          name: id.name,
+          aliases: id.aliases,
+          centroid: centroid,
+          faceSamples: kept,
+          contactId: id.contactId,
+          contactDisplayName: id.contactDisplayName,
+          contactPhotoUri: id.contactPhotoUri,
+          coverLinkId: id.coverLinkId,
+          hidden: id.hidden,
+        ),
+      );
+      repaired++;
+    }
+    _notify();
+    return (identitiesRepaired: repaired, facesCleared: cleared);
+  }
+
+  /// Clears every face name and every named identity while KEEPING the
+  /// detected faces (and their embeddings) and object detections. The
+  /// unnamed-people queue therefore stays populated with everything that was
+  /// previously tagged, ready to be named again. Use [resetIndex] to drop
+  /// detections entirely.
+  Future<int> clearAllFaces() async {
+    final box = _box;
+    final idBox = _identitiesBox;
+    final keys = box?.keys.toList() ?? const [];
+    var updated = 0;
+    for (var i = 0; i < keys.length; i++) {
+      final entry = lookup(keys[i] as String);
+      if (entry == null || !entry.faces.any((f) => f.name != null)) continue;
+      await _writeEntry(entry.copyWith(
+        faces: [
+          for (final f in entry.faces)
+            // Unname but keep the embedding so the face can be re-matched.
+            DetectedFace(rect: f.rect, embedding: f.embedding, ignored: f.ignored),
+        ],
+      ));
+      updated++;
+      // Yield periodically so the UI keeps painting on a big library.
+      if (i % 200 == 0) await Future<void>.delayed(Duration.zero);
+    }
+    await idBox?.clear();
+    _identitiesCache = null;
+    _notify();
+    return updated;
+  }
+
+  /// Wipes the entire on-device ML index — object detections, face tags and
+  /// named people — so scanning can start from zero. Unlike [clearAllFaces]
+  /// this deletes the boxes outright (no per-entry rewrite), so it is
+  /// instant even on a huge library.
+  Future<int> resetIndex() async {
+    final box = _box;
+    final idBox = _identitiesBox;
+    final removed = box?.length ?? 0;
+    await box?.clear();
+    await idBox?.clear();
+    _entryCache.clear();
+    _identitiesCache = null;
+    _peopleCounts = null;
+    _notify();
+    return removed;
   }
 
   /// The identity known by any of [name] or an alias (case-insensitive), or
@@ -364,23 +811,63 @@ class DetectionIndex extends ChangeNotifier {
 
   /// Number of scanned photos per identity name, and the count of photos
   /// containing at least one unnamed face under the key `_unnamed`.
+  /// Photo counts per person (plus [kUnnamedPeople]). Immutable and
+  /// memoized: it walks the whole library, and the person page asks for it
+  /// on every rebuild. Invalidated whenever the index changes.
   Map<String, int> countPeople() {
+    final cached = _peopleCounts;
+    if (cached != null) return cached;
     final counts = <String, int>{};
     var unnamed = 0;
     final box = _box;
     if (box != null) {
-      for (final key in box.keys) {
+      for (final key in box.keys.toList()) {
         final entry = lookup(key as String);
         if (entry == null) continue;
         final names = entry.people;
         for (final name in names) {
           counts[name] = (counts[name] ?? 0) + 1;
         }
-        if (entry.faces.any((f) => f.name == null && !f.ignored)) unnamed++;
+        if (entry.faces.any(_isUnnamedWorkable)) unnamed++;
       }
     }
     counts[kUnnamedPeople] = unnamed;
+    _peopleCounts = counts;
     return counts;
+  }
+
+  /// True when [linkId] has a face named exactly [name]. Allocation-free
+  /// (unlike peopleFor, which builds a Set per photo per rebuild).
+  bool hasPerson(String linkId, String name) {
+    final entry = lookup(linkId);
+    if (entry == null) return false;
+    for (final f in entry.faces) {
+      if (f.name == name) return true;
+    }
+    return false;
+  }
+
+  /// True when [linkId] has a face named any of [names].
+  bool hasAnyPerson(String linkId, Set<String> names) {
+    if (names.isEmpty) return false;
+    final entry = lookup(linkId);
+    if (entry == null) return false;
+    for (final f in entry.faces) {
+      final n = f.name;
+      if (n != null && names.contains(n)) return true;
+    }
+    return false;
+  }
+
+  /// True when [linkId] belongs to [group], without building a group Set.
+  bool hasGroup(String linkId, DetectionGroup group) {
+    final entry = lookup(linkId);
+    if (entry == null) return false;
+    if (group == DetectionGroup.illustrations) return entry.illustration;
+    for (final o in entry.objects) {
+      if (groupForLabel(o.label) == group) return true;
+    }
+    return false;
   }
 
   static const String kUnnamedPeople = '__unnamed__';
@@ -419,18 +906,15 @@ class DetectionIndex extends ChangeNotifier {
       final known = <String>{...prev.aliases, ...aliases}
           .where((a) => a.toLowerCase() != name.toLowerCase())
           .toList();
-      next = PersonIdentity(
+      next = prev.copyWith(
         name: name,
         aliases: known,
         centroid: centroid,
         faceSamples: n + 1,
-        contactId: prev.contactId,
-        contactDisplayName: prev.contactDisplayName,
-        contactPhotoUri: prev.contactPhotoUri,
       );
     }
-    await box.put(name, next.toMap());
-    notifyListeners();
+    await _putIdentity(name, next);
+    _notify();
     return next;
   }
 
@@ -439,8 +923,13 @@ class DetectionIndex extends ChangeNotifier {
   /// identity. Typed names that belong to an existing identity (canonical or
   /// alias) resolve to that identity instead of creating a duplicate. When
   /// [contactId] is given the identity is linked to that device contact.
+  ///
+  /// A person appears at most once per photo: when another face in this
+  /// photo is already [canonical], this call is refused with -2 rather than
+  /// silently creating a double-tagged photo.
+  ///
   /// Returns the number of newly assigned photos (excluding the one named
-  /// directly), or -1 when the face is unavailable.
+  /// directly), -1 when the face is unavailable, or -2 on the duplicate rule.
   Future<int> nameFace({
     required String linkId,
     required int faceIndex,
@@ -459,6 +948,11 @@ class DetectionIndex extends ChangeNotifier {
     final trimmed = name.trim();
     if (trimmed.isEmpty) return -1;
     final canonical = identityForName(trimmed)?.name ?? trimmed;
+
+    final duplicate = entry.faces
+        .where((f) => f.name == canonical && !f.ignored)
+        .length;
+    if (duplicate > 0) return -2;
 
     await upsertIdentity(canonical, face.embedding);
     if (contactId != null && contactId.isNotEmpty) {
@@ -480,38 +974,68 @@ class DetectionIndex extends ChangeNotifier {
     var matched = 0;
     final box = _box;
     if (box != null) {
-      final known = identities;
+      final matcher = faceMatcher();
       var i = 0;
-      for (final key in box.keys) {
+      for (final key in box.keys.toList()) {
         i++;
         final other = key == linkId ? null : lookup(key as String);
         if (other == null) continue;
         var changed = false;
+        // One identity per photo: knowing whether this photo already has
+        // [canonical] decides if a correction may move a face here.
+        var hasCanonical = other.faces.any(
+          (f) => f.name == canonical && !f.ignored,
+        );
         for (var j = 0; j < other.faces.length; j++) {
           final f = other.faces[j];
-          if (f.name != null || f.ignored) continue;
-          final name = matchIdentity(f.embedding, identities: known);
-          if (name == null) continue;
-          final score = faceMatchScore(
-            f.embedding,
-            known.firstWhere((id) => id.name == name).centroid,
-          );
+          if (f.ignored) continue;
+          if (f.name == null) {
+            final name = matcher.match(f.embedding);
+            if (name == null) continue;
+            other.faces[j] = DetectedFace(
+              rect: f.rect,
+              embedding: f.embedding,
+              name: name,
+              similarity: matcher.scoreFor(
+                f.embedding,
+                matcher.identityFor(name),
+              ),
+            );
+            if (name == canonical) hasCanonical = true;
+            changed = true;
+            continue;
+          }
+          if (f.name == canonical) continue;
+          // Correction propagation: a face already tagged as someone else
+          // but which now matches [canonical] more strongly is a mis-tag.
+          // Manually confirmed faces are never overridden, and the new name
+          // must beat the old one by the ambiguity margin.
+          if ((f.similarity ?? 0) >= 1.0) continue;
+          if (hasCanonical) continue;
+          if (matcher.match(f.embedding) != canonical) continue;
+          final target = matcher.identityFor(canonical);
+          final current = identityForName(f.name!);
+          final newScore = matcher.scoreFor(f.embedding, target);
+          final oldScore =
+              current == null ? 0.0 : matcher.scoreFor(f.embedding, current);
+          if (newScore - oldScore < kFaceMatchMargin) continue;
           other.faces[j] = DetectedFace(
             rect: f.rect,
             embedding: f.embedding,
-            name: name,
-            similarity: score,
+            name: canonical,
+            similarity: newScore,
           );
+          hasCanonical = true;
           changed = true;
         }
         if (changed) {
           matched++;
-          await box.put(other.linkId, other.toMap());
+          await _writeEntry(other);
           if (i % 25 == 0) await Future<void>.delayed(Duration.zero);
         }
       }
     }
-    notifyListeners();
+    _notify();
     return matched;
   }
 
@@ -549,36 +1073,23 @@ class DetectionIndex extends ChangeNotifier {
     final existing = identityForName(trimmed);
     if (existing != null && existing.name != oldName) return -1;
 
-    await box.delete(oldName);
+    await _deleteIdentity(oldName);
     final aliasSet = <String>{...prev.aliases, ...aliases}
       ..removeWhere((a) => a.toLowerCase() == trimmed.toLowerCase());
-    await box.put(
+    await _putIdentity(
       trimmed,
-      PersonIdentity(
-        name: trimmed,
-        aliases: aliasSet.toList()..sort(),
-        centroid: prev.centroid,
-        faceSamples: prev.faceSamples,
-        contactId: prev.contactId,
-        contactDisplayName: prev.contactDisplayName,
-        contactPhotoUri: prev.contactPhotoUri,
-      ).toMap(),
+      prev.copyWith(name: trimmed, aliases: aliasSet.toList()..sort()),
     );
     var updated = 0;
     final detections = _box;
     if (detections != null && trimmed != oldName) {
-      for (final key in detections.keys) {
+      for (final key in detections.keys.toList()) {
         final entry = lookup(key as String);
         if (entry == null || !entry.faces.any((f) => f.name == oldName)) {
           continue;
         }
-        detections.put(
-          entry.linkId,
-          DetectedEntry(
-            linkId: entry.linkId,
-            modelVersion: entry.modelVersion,
-            detectedAt: entry.detectedAt,
-            objects: entry.objects,
+        await _writeEntry(
+          entry.copyWith(
             faces: [
               for (final f in entry.faces)
                 if (f.name == oldName)
@@ -591,12 +1102,12 @@ class DetectionIndex extends ChangeNotifier {
                 else
                   f,
             ],
-          ).toMap(),
+          ),
         );
         updated++;
       }
     }
-    notifyListeners();
+    _notify();
     return updated;
   }
 
@@ -614,19 +1125,16 @@ class DetectionIndex extends ChangeNotifier {
     final raw = box.get(canonical);
     if (raw == null) return;
     final prev = PersonIdentity.fromMap(raw.cast<String, dynamic>());
-    await box.put(
+    await _putIdentity(
       canonical,
-      PersonIdentity(
+      prev.copyWith(
         name: canonical,
-        aliases: prev.aliases,
-        centroid: prev.centroid,
-        faceSamples: prev.faceSamples,
         contactId: contactId,
         contactDisplayName: contactDisplayName,
         contactPhotoUri: contactPhotoUri ?? prev.contactPhotoUri,
-      ).toMap(),
+      ),
     );
-    notifyListeners();
+    _notify();
   }
 
   /// Removes an identity's contact link (the identity itself is kept).
@@ -637,16 +1145,18 @@ class DetectionIndex extends ChangeNotifier {
     final raw = box.get(canonical);
     if (raw == null) return;
     final prev = PersonIdentity.fromMap(raw.cast<String, dynamic>());
-    await box.put(
+    await _putIdentity(
       canonical,
       PersonIdentity(
         name: canonical,
         aliases: prev.aliases,
         centroid: prev.centroid,
         faceSamples: prev.faceSamples,
-      ).toMap(),
+        coverLinkId: prev.coverLinkId,
+        hidden: prev.hidden,
+      ),
     );
-    notifyListeners();
+    _notify();
   }
 
   /// Combines several identities into one person: all their names become
@@ -664,26 +1174,21 @@ class DetectionIndex extends ChangeNotifier {
     if (valid.length < 2) return null;
 
     for (final p in valid) {
-      await box.delete(p.name);
+      await _deleteIdentity(p.name);
     }
     final merged = mergePeople(valid, primary: primaryName);
-    await box.put(merged.name, merged.toMap());
+    await _putIdentity(merged.name, merged);
 
     final oldNames = {for (final p in valid) p.name};
     final detections = _box;
     if (detections != null) {
-      for (final key in detections.keys) {
+      for (final key in detections.keys.toList()) {
         final entry = lookup(key as String);
         if (entry == null || !entry.faces.any((f) => oldNames.contains(f.name))) {
           continue;
         }
-        detections.put(
-          entry.linkId,
-          DetectedEntry(
-            linkId: entry.linkId,
-            modelVersion: entry.modelVersion,
-            detectedAt: entry.detectedAt,
-            objects: entry.objects,
+        await _writeEntry(
+          entry.copyWith(
             faces: [
               for (final f in entry.faces)
                 oldNames.contains(f.name)
@@ -695,12 +1200,40 @@ class DetectionIndex extends ChangeNotifier {
                       )
                     : f,
             ],
-          ).toMap(),
+          ),
         );
       }
     }
-    notifyListeners();
+    _notify();
     return merged;
+  }
+
+  /// Builds a [FaceMatcher] over the current identities, gathering confirmed
+  /// (manually named, similarity 1.0, non-ignored) face embeddings from the
+  /// detection box as per-identity samples. Auto-assigned faces are excluded
+  /// so a wrong auto-tag can't vote for itself.
+  FaceMatcher faceMatcher() {
+    final ids = identities;
+    final samples = <String, List<Float32List>>{};
+    final box = _box;
+    if (box != null) {
+      for (final key in box.keys.toList()) {
+        final entry = lookup(key as String);
+        if (entry == null) continue;
+        for (final f in entry.faces) {
+          final name = f.name;
+          if (name == null || f.ignored) continue;
+          if (f.similarity == null || f.similarity! < 1.0) continue;
+          // Tiny faces have weak, poorly-separating embeddings (audited: a
+          // person's small faces scored ~0.38 against each other), so they
+          // are not evidence. Contaminated larger samples are filtered
+          // downstream by the matcher's medoid-consensus trimming.
+          if (f.rect.width * f.rect.height < kMinAutoFaceArea) continue;
+          (samples[name] ??= []).add(f.embedding);
+        }
+      }
+    }
+    return FaceMatcher(identities: ids, confirmedSamples: samples);
   }
 
   /// Merges identities synced from another device into the local store and
@@ -725,14 +1258,14 @@ class DetectionIndex extends ChangeNotifier {
       final local = identityForName(r.name) ??
           _identityForAnyName(r.aliases);
       if (local == null) {
-        await box.put(
+        await _putIdentity(
           r.name,
           PersonIdentity(
             name: r.name,
             aliases: r.aliases,
             centroid: r.centroid,
             faceSamples: r.faceSamples,
-          ).toMap(),
+          ),
         );
         continue;
       }
@@ -748,10 +1281,10 @@ class DetectionIndex extends ChangeNotifier {
           local.faceSamples >= remoteView.faceSamples ? local : remoteView;
       final merged = mergePeople([local, remoteView], primary: primary.name);
       if (local.name != merged.name) {
-        await box.delete(local.name);
+        await _deleteIdentity(local.name);
         renamedFaces[local.name] = merged.name;
       }
-      await box.put(merged.name, merged.toMap());
+      await _putIdentity(merged.name, merged);
     }
     if (renamedFaces.isNotEmpty) {
       await _renameFaces(renamedFaces);
@@ -772,19 +1305,14 @@ class DetectionIndex extends ChangeNotifier {
   Future<void> _renameFaces(Map<String, String> renames) async {
     final detections = _box;
     if (detections == null) return;
-    for (final key in detections.keys) {
+    for (final key in detections.keys.toList()) {
       final entry = lookup(key as String);
       if (entry == null ||
           !entry.faces.any((f) => renames.containsKey(f.name))) {
         continue;
       }
-      await detections.put(
-        entry.linkId,
-        DetectedEntry(
-          linkId: entry.linkId,
-          modelVersion: entry.modelVersion,
-          detectedAt: entry.detectedAt,
-          objects: entry.objects,
+      await _writeEntry(
+        entry.copyWith(
           faces: [
             for (final f in entry.faces)
               renames.containsKey(f.name)
@@ -797,37 +1325,37 @@ class DetectionIndex extends ChangeNotifier {
                     )
                   : f,
           ],
-        ).toMap(),
+        ),
       );
     }
   }
 
   /// Runs identity matching over every stored unnamed face (ignored faces
-  /// are skipped) and assigns names where the centroid similarity clears the
-  /// threshold. Returns the number of photos updated.
+  /// are skipped) and assigns names where the matcher is decisive. Returns
+  /// the number of photos updated.
   Future<int> rematchUnnamed() async {
     final box = _box;
-    final ids = identities;
-    if (box == null || ids.isEmpty) return 0;
+    if (box == null || identities.isEmpty) return 0;
+    final matcher = faceMatcher();
     var updated = 0;
-    for (final key in box.keys) {
+    for (final key in box.keys.toList()) {
       final entry = lookup(key as String);
-      if (entry == null) continue;
+      if (entry == null || entry.illustration) continue;
       var changed = false;
       final faces = [
         for (final f in entry.faces)
-          if (f.name == null && !f.ignored)
+          if (f.name == null && !f.ignored && _isAutoMatchable(f))
             () {
-              final name = matchIdentity(f.embedding, identities: ids);
+              final name = matcher.match(f.embedding);
               if (name == null) return f;
               changed = true;
               return DetectedFace(
                 rect: f.rect,
                 embedding: f.embedding,
                 name: name,
-                similarity: faceMatchScore(
+                similarity: matcher.scoreFor(
                   f.embedding,
-                  ids.firstWhere((i) => i.name == name).centroid,
+                  matcher.identityFor(name),
                 ),
                 ignored: f.ignored,
               );
@@ -837,19 +1365,10 @@ class DetectionIndex extends ChangeNotifier {
       ];
       if (changed) {
         updated++;
-        await box.put(
-          entry.linkId,
-          DetectedEntry(
-            linkId: entry.linkId,
-            modelVersion: entry.modelVersion,
-            detectedAt: entry.detectedAt,
-            objects: entry.objects,
-            faces: faces,
-          ).toMap(),
-        );
+        await _writeEntry(entry.copyWith(faces: faces));
       }
     }
-    if (updated > 0) notifyListeners();
+    if (updated > 0) _notify();
     return updated;
   }
 
@@ -859,23 +1378,18 @@ class DetectionIndex extends ChangeNotifier {
   Future<int> removeIdentity(String name) async {
     final box = _identitiesBox;
     if (box == null) return 0;
-    await box.delete(name);
+    await _deleteIdentity(name);
     var updated = 0;
     final detections = _box;
     if (detections != null) {
-      for (final key in detections.keys) {
+      for (final key in detections.keys.toList()) {
         final entry = lookup(key as String);
         if (entry == null ||
             !entry.faces.any((f) => f.name == name)) {
           continue;
         }
-        detections.put(
-          entry.linkId,
-          DetectedEntry(
-            linkId: entry.linkId,
-            modelVersion: entry.modelVersion,
-            detectedAt: entry.detectedAt,
-            objects: entry.objects,
+        await _writeEntry(
+          entry.copyWith(
             faces: [
               for (final f in entry.faces)
                 if (f.name == name)
@@ -883,12 +1397,12 @@ class DetectionIndex extends ChangeNotifier {
                 else
                   f,
             ],
-          ).toMap(),
+          ),
         );
         updated++;
       }
     }
-    notifyListeners();
+    _notify();
     return updated;
   }
 

@@ -37,6 +37,16 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    packaging {
+        // The embedded photon serve binary ships as a "native library"
+        // (libphotonserve.so) that is actually an executable; it must be
+        // extracted to disk uncompressed so it can be exec'd from
+        // nativeLibraryDir.
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 }
 
 kotlin {

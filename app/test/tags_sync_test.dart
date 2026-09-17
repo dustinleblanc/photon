@@ -146,14 +146,19 @@ void main() {
     expect(merged.single.name, 'Mom');
   });
 
-  test('clearing low-confidence tags keeps manual tags and embeddings',
+  test('reconciliation clears auto-tags below threshold, keeps manual ones',
       () async {
-    // A manual tag (similarity 1.0) and a loose auto-tag (0.55, under the
-    // current 0.6 threshold) on separate photos.
-    final manual = entryWithFace('photo-manual', emb(1), name: 'Mom');
+    // Manual tag: embedding matches the identity exactly (similarity 1.0).
+    // Loose auto-tag: orthogonal embedding stored with a 0.55 score from
+    // the looser-threshold era — re-deriving clears it.
+    final e0 = Float32List(192)..[0] = 1;
+    final orthogonal = Float32List(192)..[1] = 1;
+    await index.upsertIdentity('Mom', e0);
+
+    final manual = entryWithFace('photo-manual', e0, name: 'Mom');
     manual.faces[0].similarity = 1.0;
     await index.put(manual);
-    final loose = entryWithFace('photo-loose', emb(2), name: 'Mom');
+    final loose = entryWithFace('photo-loose', orthogonal, name: 'Mom');
     loose.faces[0].similarity = 0.55;
     await index.put(loose);
 
@@ -203,6 +208,329 @@ void main() {
     expect(index.facesFor('photo-clear').single.name, 'A');
   });
 
+  test('a runner-up below its own threshold does not block a match',
+      () async {
+    // A is well confirmed (threshold 0.55), B has a single sample (0.60).
+    // The face scores 0.62 vs A and 0.59 vs B: A is a valid match, B is not
+    // a valid match on its own, so B is not a real rival despite the small
+    // 0.03 gap.
+    final a = Float32List(192)..[0] = 1;
+    final b = Float32List(192)..[1] = 1;
+    for (var i = 0; i < 6; i++) {
+      await index.upsertIdentity('A', a);
+    }
+    await index.upsertIdentity('B', b);
+    final face = Float32List(192)
+      ..[0] = 0.75
+      ..[1] = 0.59
+      ..[2] = 0.2990; // unit: 0.75² + 0.59² + 0.299² ≈ 1
+    await index.put(entryWithFace('photo-close', face));
+
+    await index.rematchUnnamed();
+
+    expect(index.facesFor('photo-close').single.name, 'A');
+  });
+
+  test('rematchUnnamed never auto-names tiny crowd faces', () async {
+    final e0 = Float32List(192)..[0] = 1;
+    await index.upsertIdentity('A', e0);
+    final tiny = entryWithFace('photo-tiny', e0);
+    tiny.faces[0] = DetectedFace(
+      rect: const Rect.fromLTWH(0.9, 0.08, 0.05, 0.065),
+      embedding: tiny.faces[0].embedding,
+    );
+    await index.put(tiny);
+
+    await index.rematchUnnamed();
+
+    expect(index.facesFor('photo-tiny').single.name, isNull);
+  });
+
+  test('reconciliation clears auto-names from now-tiny faces', () async {
+    final e0 = Float32List(192)..[0] = 1;
+    await index.upsertIdentity('A', e0);
+    final tiny = entryWithFace('photo-tiny', e0, name: 'A');
+    tiny.faces[0] = DetectedFace(
+      rect: const Rect.fromLTWH(0.9, 0.08, 0.05, 0.065),
+      embedding: tiny.faces[0].embedding,
+      name: 'A',
+      similarity: 0.65,
+    );
+    await index.put(tiny);
+
+    await index.reconcileAutoAssignedNames();
+
+    expect(index.facesFor('photo-tiny').single.name, isNull);
+  });
+
+  test('ignoring a face untags and ignores it in every photo', () async {
+    final alexFace = Float32List(192)..[0] = 1;
+    final rileyFace = Float32List(192)..[1] = 1;
+    await index.upsertIdentity('Alex', alexFace);
+    await index.upsertIdentity('Riley', rileyFace);
+    // Several photos of the same unknown face, wrongly auto-tagged Alex.
+    for (var i = 0; i < 3; i++) {
+      final e = entryWithFace('stranger-$i', rileyFace, name: 'Alex');
+      e.faces[0].similarity = 0.65;
+      await index.put(e);
+    }
+    // An unrelated Alex face that must be left alone.
+    final keep = entryWithFace('alex-photo', alexFace, name: 'Alex');
+    keep.faces[0].similarity = 0.8;
+    await index.put(keep);
+
+    final count = await index.ignoreFaceEverywhere('stranger-0', 0);
+
+    expect(count, 3);
+    for (var i = 0; i < 3; i++) {
+      final f = index.facesFor('stranger-$i').single;
+      expect(f.ignored, isTrue);
+      expect(f.name, isNull);
+    }
+    // A different face stays tagged.
+    final other = index.facesFor('alex-photo').single;
+    expect(other.ignored, isFalse);
+    expect(other.name, 'Alex');
+    // Ignored faces are not unnamed work.
+    expect(
+      index.unnamedFaces().map((f) => f.linkId),
+      isNot(contains('stranger-0')),
+    );
+  });
+
+  test('correcting a name retags near-identical auto-tagged photos', () async {
+    final alexFace = Float32List(192)..[0] = 1;
+    final rileyFace = Float32List(192)..[1] = 1;
+    await index.upsertIdentity('Alex', alexFace);
+    await index.upsertIdentity('Riley', rileyFace);
+    // A batch of near-identical Riley photos wrongly auto-tagged as Alex.
+    final wrong1 = entryWithFace('riley-1', rileyFace, name: 'Alex');
+    wrong1.faces[0].similarity = 0.62;
+    await index.put(wrong1);
+    final wrong2 = entryWithFace('riley-2', rileyFace, name: 'Alex');
+    wrong2.faces[0].similarity = 0.60;
+    await index.put(wrong2);
+    // The photo the user corrects by hand.
+    await index.put(entryWithFace('riley-3', rileyFace));
+
+    await index.nameFace(linkId: 'riley-3', faceIndex: 0, name: 'Riley');
+
+    expect(index.facesFor('riley-1').single.name, 'Riley');
+    expect(index.facesFor('riley-2').single.name, 'Riley');
+    expect(index.facesFor('riley-3').single.name, 'Riley');
+  });
+
+  test('correction never overrides a manually confirmed tag', () async {
+    final alexFace = Float32List(192)..[0] = 1;
+    final rileyFace = Float32List(192)..[1] = 1;
+    await index.upsertIdentity('Alex', alexFace);
+    await index.upsertIdentity('Riley', rileyFace);
+    final manual = entryWithFace('manual-alex', rileyFace, name: 'Alex');
+    manual.faces[0].similarity = 1.0;
+    await index.put(manual);
+    await index.put(entryWithFace('riley-3', rileyFace));
+
+    await index.nameFace(linkId: 'riley-3', faceIndex: 0, name: 'Riley');
+
+    expect(index.facesFor('manual-alex').single.name, 'Alex');
+  });
+
+  test('correcting one person leaves unrelated auto-tags alone', () async {
+    final a = Float32List(192)..[0] = 1;
+    final b = Float32List(192)..[1] = 1;
+    final c = Float32List(192)..[2] = 1;
+    await index.upsertIdentity('A', a);
+    await index.upsertIdentity('B', b);
+    await index.upsertIdentity('C', c);
+    // An auto-tag that genuinely belongs to C.
+    final cee = entryWithFace('c-photo', c, name: 'A');
+    cee.faces[0].similarity = 0.7;
+    await index.put(cee);
+    await index.put(entryWithFace('b-photo', b));
+
+    await index.nameFace(linkId: 'b-photo', faceIndex: 0, name: 'B');
+
+    expect(index.facesFor('c-photo').single.name, 'A');
+  });
+
+  test('a person can only be named once per photo', () async {
+    final e0 = Float32List(192)..[0] = 1;
+    await index.upsertIdentity('A', e0);
+    final e = entryWithFace('group-photo', e0, name: null);
+    e.faces.add(
+      DetectedFace(
+        rect: const Rect.fromLTWH(0.5, 0.5, 0.2, 0.2),
+        embedding: Float32List(192)..[1] = 1,
+      ),
+    );
+    await index.put(e);
+
+    final first = await index.nameFace(
+      linkId: 'group-photo',
+      faceIndex: 0,
+      name: 'A',
+    );
+    expect(first, greaterThanOrEqualTo(0));
+    final second = await index.nameFace(
+      linkId: 'group-photo',
+      faceIndex: 1,
+      name: 'A',
+    );
+    expect(second, -2);
+    expect(index.facesFor('group-photo')[1].name, isNull);
+  });
+
+  test('tiny faces are excluded from the unnamed worklist', () async {
+    final big = entryWithFace('photo-big', emb(1));
+    big.faces[0] = DetectedFace(
+      rect: const Rect.fromLTWH(0.2, 0.2, 0.3, 0.3),
+      embedding: big.faces[0].embedding,
+    );
+    await index.put(big);
+    final tiny = entryWithFace('photo-tiny', emb(2));
+    tiny.faces[0] = DetectedFace(
+      rect: const Rect.fromLTWH(0.9, 0.08, 0.05, 0.065),
+      embedding: tiny.faces[0].embedding,
+    );
+    await index.put(tiny);
+
+    final links = index.unnamedFaces().map((f) => f.linkId).toList();
+
+    expect(links, contains('photo-big'));
+    expect(links, isNot(contains('photo-tiny')));
+    // The tiny face still counts as unnamed work if named later... it
+    // doesn't, by design: it's manual-only via the photo's panel.
+    expect(index.hasUnnamedFace('photo-tiny'), isFalse);
+  });
+
+  test('autoMatchFaces assigns each person at most once per photo', () async {
+    // Two faces both matching A; the stronger one wins the slot.
+    final e0 = Float32List(192)..[0] = 1;
+    await index.upsertIdentity('A', e0);
+    final weak = Float32List(192)
+      ..[0] = 0.98
+      ..[1] = 0.199;
+    final faces = [
+      DetectedFace(
+        rect: const Rect.fromLTWH(0.0, 0.0, 0.3, 0.3),
+        embedding: weak,
+      ),
+      DetectedFace(
+        rect: const Rect.fromLTWH(0.4, 0.0, 0.3, 0.3),
+        embedding: e0,
+      ),
+    ];
+    autoMatchFaces(faces, matcher: index.faceMatcher());
+
+    final names = faces.map((f) => f.name).toList();
+    expect(names.where((n) => n == 'A').length, 1);
+    // The exact match (cosine 1.0) is the one that got the slot.
+    expect(faces[1].name, 'A');
+    expect(faces[0].name, isNull);
+  });
+
+  test('autoMatchFaces never auto-assigns tiny faces', () async {
+    final e0 = Float32List(192)..[0] = 1;
+    await index.upsertIdentity('A', e0);
+    final tiny = DetectedFace(
+      rect: const Rect.fromLTWH(0.9, 0.08, 0.05, 0.065),
+      embedding: e0,
+    );
+    autoMatchFaces([tiny], matcher: index.faceMatcher());
+    expect(tiny.name, isNull);
+  });
+
+  test('hiding a person excludes their photos and survives rewrites',
+      () async {
+    final e0 = Float32List(192)..[0] = 1;
+    await index.upsertIdentity('Ex', e0);
+    final entry = entryWithFace('photo-ex', e0, name: 'Ex');
+    entry.faces[0].similarity = 1.0;
+    await index.put(entry);
+
+    expect(index.hasHiddenPerson('photo-ex'), isFalse);
+
+    await index.setPersonHidden('Ex', true);
+
+    expect(index.hiddenNames, contains('Ex'));
+    expect(index.hasHiddenPerson('photo-ex'), isTrue);
+
+    // Other rewrite paths must not silently drop the flag.
+    await index.upsertIdentity('Ex', e0);
+    expect(index.identityForName('Ex')!.hidden, isTrue);
+
+    await index.setPersonHidden('Ex', false);
+    expect(index.hasHiddenPerson('photo-ex'), isFalse);
+  });
+
+  test('clearPersonFaces untags their photos and resets the centroid',
+      () async {
+    final e0 = Float32List(192)..[0] = 1;
+    await index.upsertIdentity('Ex', e0);
+    final tagged = entryWithFace('photo-a', e0, name: 'Ex');
+    tagged.faces[0].similarity = 1.0;
+    await index.put(tagged);
+    final other = entryWithFace('photo-b', emb(2), name: 'Someone');
+    other.faces[0].similarity = 1.0;
+    await index.put(other);
+
+    final count = await index.clearPersonFaces('Ex');
+
+    expect(count, 1);
+    expect(index.facesFor('photo-a').single.name, isNull);
+    // Other people are untouched.
+    expect(index.facesFor('photo-b').single.name, 'Someone');
+    // The identity survives but its matching profile is reset.
+    final id = index.identityForName('Ex');
+    expect(id, isNotNull);
+    expect(id!.faceSamples, 0);
+    expect(index.faceMatcher().confirmedSamples.containsKey('Ex'), isFalse);
+  });
+
+  test('clearAllFaces removes every tag and identity but keeps detections',
+      () async {
+    final e0 = Float32List(192)..[0] = 1;
+    await index.upsertIdentity('Ex', e0);
+    final a = entryWithFace('photo-a', e0, name: 'Ex');
+    a.faces[0].similarity = 1.0;
+    await index.put(a);
+    final b = entryWithFace('photo-b', emb(3));
+    await index.put(b);
+
+    await index.clearAllFaces();
+
+    expect(index.identities, isEmpty);
+    // Faces are kept but unnamed, so the unnamed queue stays populated.
+    expect(index.facesFor('photo-a').single.name, isNull);
+    expect(index.facesFor('photo-a').single.embedding, isNotEmpty);
+    // A face that was never named is untouched.
+    expect(index.facesFor('photo-b').single.name, isNull);
+    expect(index.lookup('photo-a'), isNotNull);
+  });
+
+  test('setPersonCover is used and survives an unrelated rewrite', () async {
+    final e0 = Float32List(192)..[0] = 1;
+    await index.upsertIdentity('Mom', e0);
+    final a = entryWithFace('cover-photo', e0, name: 'Mom');
+    a.faces[0].similarity = 1.0;
+    await index.put(a);
+
+    await index.setPersonCover('Mom', 'cover-photo');
+    expect(index.identityForName('Mom')!.coverLinkId, 'cover-photo');
+    expect(index.faceRectIn('cover-photo', 'Mom'), isNotNull);
+
+    // An unrelated identity rewrite (aliases) must not drop the cover.
+    await index.updateIdentity(
+      oldName: 'Mom',
+      newName: 'Mom',
+      aliases: ['Mother'],
+    );
+    expect(index.identityForName('Mom')!.coverLinkId, 'cover-photo');
+
+    await index.setPersonCover('Mom', null);
+    expect(index.identityForName('Mom')!.coverLinkId, isNull);
+  });
+
   test('bestFaces prefers confirmed faces over large low-confidence ones',
       () async {
     // Jordan's real (manual, small) face vs a big mis-tagged auto face.
@@ -232,5 +560,80 @@ void main() {
 
     expect(best, isNotNull);
     expect(best!.linkId, 'photo-real');
+  });
+
+  test('a match needs the centroid to be broadly close, not one outlier sample',
+      () async {
+    // A has two orthogonal confirmed samples, so its centroid is their mean.
+    // q matches one sample at 0.75 but sits far from the centroid — the
+    // "broad" gate refuses it, which is what stops a single odd sample from
+    // naming faces on its own.
+    final e0 = Float32List(192)..[0] = 1;
+    final s = Float32List(192)..[1] = 1;
+    await index.upsertIdentity('A', e0);
+    await index.upsertIdentity('A', s);
+    await index.put(
+      entryWithFace('e0-photo', e0, name: 'A')..faces[0].similarity = 1.0,
+    );
+    await index.put(
+      entryWithFace('s-photo', s, name: 'A')..faces[0].similarity = 1.0,
+    );
+
+    // q = 0.75*s + 0.661*t (orthogonal to both e0 and s).
+    final q = Float32List(192)
+      ..[1] = 0.75
+      ..[2] = 0.6614;
+    expect(cosineSimilarity(q, s), closeTo(0.75, 1e-3));
+
+    await index.put(entryWithFace('q-photo', q));
+    await index.rematchUnnamed();
+
+    expect(index.facesFor('q-photo').single.name, isNull);
+  });
+
+  test('auto-assigned faces never become matcher samples', () async {
+    // w is an auto-tagged face at 60 degrees from the centroid e0; q sits
+    // 0.65 from w but -0.33 from e0. If w counted as a sample, q would
+    // match; confirmed-only samples keep it unnamed.
+    final e0 = Float32List(192)..[0] = 1;
+    final w = Float32List(192)
+      ..[0] = 0.5
+      ..[1] = 0.8660254;
+    final q = Float32List(192)
+      ..[0] = -0.334
+      ..[1] = 0.9427;
+    expect(cosineSimilarity(q, w), closeTo(0.65, 1e-3));
+    expect(cosineSimilarity(q, e0), closeTo(-0.334, 1e-3));
+
+    await index.upsertIdentity('A', e0);
+    final auto = entryWithFace('auto-photo', w, name: 'A');
+    auto.faces[0].similarity = 0.65;
+    await index.put(auto);
+    await index.put(entryWithFace('q-photo', q));
+
+    await index.rematchUnnamed();
+
+    expect(index.facesFor('q-photo').single.name, isNull);
+  });
+
+  test('confirming more faces does not loosen the threshold', () async {
+    // A is very well confirmed, but 0.575 is below the strict bar: the
+    // threshold no longer eases with sample count (that shortcut let
+    // lookalikes through).
+    final e0 = Float32List(192)..[0] = 1;
+    final q = Float32List(192)
+      ..[0] = 0.575
+      ..[1] = 0.8181;
+    for (var i = 0; i < 4; i++) {
+      await index.upsertIdentity('A', e0);
+    }
+    await index.put(
+      entryWithFace('e0-photo', e0, name: 'A')..faces[0].similarity = 1.0,
+    );
+    await index.put(entryWithFace('q-photo', q));
+
+    await index.rematchUnnamed();
+
+    expect(index.facesFor('q-photo').single.name, isNull);
   });
 }

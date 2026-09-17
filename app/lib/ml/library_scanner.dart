@@ -1,9 +1,9 @@
 import 'package:flutter/foundation.dart';
-import 'package:image/image.dart' as img;
 
 import 'detection.dart';
 import 'detection_index.dart';
 import 'faces.dart';
+import 'illustration.dart';
 
 /// Batch-scans a photo library on-device: for each photo it fetches the
 /// (already-decrypted) preview bytes, runs object detection in a background
@@ -21,6 +21,7 @@ class LibraryScanner extends ChangeNotifier {
   bool _cancelRequested = false;
   int _processed = 0;
   int _total = 0;
+  int _illustrationsFound = 0;
   String? _error;
 
   bool get running => _running;
@@ -45,31 +46,40 @@ class LibraryScanner extends ChangeNotifier {
       _faces = faces;
       for (final linkId in linkIds) {
         if (_cancelRequested) break;
-        if (_index.lookup(linkId) != null) {
+        // Skip only fully-processed photos. Entries whose face pass hasn't
+        // run (or whose faces were cleared) are reprocessed so faces come
+        // back without a full index reset.
+        final existing = _index.lookup(linkId);
+        if (existing != null && existing.facesChecked) {
           _processed++;
           continue;
         }
         try {
           final bytes = await _fetchPreview(linkId, size: 1600);
-          final decoded = img.decodeImage(bytes);
-          if (decoded == null) throw Exception('unable to decode image');
-          final width = decoded.width;
-          final height = decoded.height;
+          // Decode + classify off the UI thread; decoding a 1600px JPEG on
+          // the main isolate stalls the UI for tens of milliseconds a photo.
+          final info = await compute(analysePreviewBytes, bytes);
+          if (info == null) throw Exception('unable to decode image');
+          final (width, height, isIllustration) = info;
           final objects = await detector.detect(
             bytes: bytes,
             imageWidth: width,
             imageHeight: height,
           );
           var detectedFaces = const <DetectedFace>[];
-          final hasPeople = objects
-              .any((o) => groupForLabel(o.label) == DetectionGroup.people);
+          // Illustrations (drawings, screenshots) would otherwise feed the
+          // face detector cartoon "faces" that pollute people matching, so
+          // they are categorised and skipped entirely.
+          final hasPeople = !isIllustration &&
+              objects
+                  .any((o) => groupForLabel(o.label) == DetectionGroup.people);
           if (hasPeople) {
             detectedFaces = await faces.detectFaces(
               bytes: bytes,
               imageWidth: width,
               imageHeight: height,
             );
-            autoMatchFaces(detectedFaces, identities: _index.identities);
+            autoMatchFaces(detectedFaces, matcher: _index.faceMatcher());
           }
           await _index.put(
             DetectedEntry(
@@ -78,6 +88,9 @@ class LibraryScanner extends ChangeNotifier {
               detectedAt: DateTime.now(),
               objects: objects,
               faces: detectedFaces,
+              illustration: isIllustration,
+              styleChecked: true,
+              facesChecked: true,
             ),
           );
         } catch (e) {
@@ -94,6 +107,78 @@ class LibraryScanner extends ChangeNotifier {
       _running = false;
       notifyListeners();
     }
+  }
+
+  /// One-time style pass over already-scanned photos: recomputes the
+  /// illustration flag (and drops auto-assigned faces from illustrations)
+  /// without re-running object/face detection. Only entries whose flag is
+  /// still unknown ([DetectedEntry.styleChecked] false) are revisited, so it
+  /// is cheap to run repeatedly until the library is fully classified.
+  /// Returns how many photos were classified and how many came out as
+  /// illustrations. [force] re-evaluates photos already checked (needed
+  /// after the heuristic is tuned).
+  Future<({int classified, int illustrations})> classifyStyles(
+    List<String> linkIds, {
+    bool force = false,
+  }) async {
+    if (_running) return (classified: 0, illustrations: 0);
+    _running = true;
+    _cancelRequested = false;
+    _processed = 0;
+    _error = null;
+    _total = 0;
+    _illustrationsFound = 0;
+    notifyListeners();
+    try {
+      final pending = [
+        for (final id in linkIds)
+          if (_index.lookup(id) case final e?
+              when force || !e.styleChecked) id,
+      ];
+      _total = pending.length;
+      notifyListeners();
+      for (final linkId in pending) {
+        if (_cancelRequested) break;
+        try {
+          final existing = _index.lookup(linkId);
+          if (existing == null) continue;
+          final bytes = await _fetchPreview(linkId, size: 1600);
+          // Decode + classify off the UI thread.
+          final isIllustration =
+              await compute(classifyIllustrationBytes, bytes);
+          if (isIllustration == null) continue;
+          if (isIllustration) _illustrationsFound++;
+          if (isIllustration) {
+            // Keep manual tags, drop auto-assigned ones.
+            final kept = [
+              for (final f in existing.faces)
+                if (f.name == null || (f.similarity ?? 0) >= 1.0) f,
+            ];
+            await _index.put(existing.copyWith(
+              illustration: true,
+              styleChecked: true,
+              faces: kept,
+            ));
+          } else {
+            await _index.put(existing.copyWith(
+              illustration: false,
+              styleChecked: true,
+            ));
+          }
+        } catch (e) {
+          _error = e.toString();
+        }
+        _processed++;
+        notifyListeners();
+      }
+    } finally {
+      _running = false;
+      notifyListeners();
+    }
+    return (
+      classified: _processed,
+      illustrations: _illustrationsFound,
+    );
   }
 
   void cancel() {

@@ -23,3 +23,6 @@ DerivedData/
 *.db
 *.db-wal
 *.db-shm
+
+# Embedded Android sidecar binary (built by `make build-android-embed`)
+/app/android/app/src/main/jniLibs/

@@ -6,11 +6,14 @@ import 'package:object_detection/object_detection.dart' as od;
 import 'faces.dart';
 
 /// High-level buckets used by the library filters. Labels outside these sets
-/// fall into [DetectionGroup.objects].
+/// fall into [DetectionGroup.objects]. [illustrations] is not a detector
+/// label: it is set from image statistics (see `illustration.dart`) so
+/// drawings, screenshots and memes can be filtered apart from photographs.
 enum DetectionGroup {
   people('People', Icons.face),
   pets('Pets', Icons.pets),
-  objects('Objects', Icons.category);
+  objects('Objects', Icons.category),
+  illustrations('Illustrations', Icons.brush);
 
   const DetectionGroup(this.label, this.icon);
   final String label;
@@ -85,6 +88,9 @@ class DetectedEntry {
     required this.detectedAt,
     required this.objects,
     this.faces = const [],
+    this.illustration = false,
+    this.styleChecked = false,
+    this.facesChecked = false,
   });
 
   factory DetectedEntry.fromMap(String linkId, Map<String, dynamic> map) =>
@@ -104,6 +110,9 @@ class DetectedEntry {
               (e) => DetectedFace.fromMap((e as Map).cast<String, dynamic>()),
             )
             .toList(),
+        illustration: map['illustration'] as bool? ?? false,
+        styleChecked: map['styleChecked'] as bool? ?? false,
+        facesChecked: map['facesChecked'] as bool? ?? false,
       );
 
   final String linkId;
@@ -112,8 +121,46 @@ class DetectedEntry {
   final List<DetectedObjectInfo> objects;
   final List<DetectedFace> faces;
 
-  Set<DetectionGroup> get groups =>
-      groupsForLabels(objects.map((o) => o.label));
+  /// True when the image looks like an illustration/screenshot rather than a
+  /// photograph. Set from image statistics at scan time (or by the style
+  /// pass); such photos skip face detection entirely.
+  final bool illustration;
+
+  /// True once the style heuristic has run for this photo; absent means
+  /// "not yet classified" so the style pass knows what to revisit.
+  final bool styleChecked;
+
+  /// True once the face pass has run for this photo. Scans reprocess entries
+  /// without it, which is how a cleared/emptied face set self-heals; older
+  /// entries default to false so the next scan re-detects them.
+  final bool facesChecked;
+
+  Set<DetectionGroup> get groups => {
+        ...groupsForLabels(objects.map((o) => o.label)),
+        if (illustration) DetectionGroup.illustrations,
+      };
+
+  /// Same entry with selected fields replaced. Rewrite paths (naming,
+  /// reconciliation, ignore) use this so style/illustration flags and
+  /// metadata are never silently dropped.
+  DetectedEntry copyWith({
+    DateTime? detectedAt,
+    List<DetectedObjectInfo>? objects,
+    List<DetectedFace>? faces,
+    bool? illustration,
+    bool? styleChecked,
+    bool? facesChecked,
+  }) =>
+      DetectedEntry(
+        linkId: linkId,
+        modelVersion: modelVersion,
+        detectedAt: detectedAt ?? this.detectedAt,
+        objects: objects ?? this.objects,
+        faces: faces ?? this.faces,
+        illustration: illustration ?? this.illustration,
+        styleChecked: styleChecked ?? this.styleChecked,
+        facesChecked: facesChecked ?? this.facesChecked,
+      );
 
   /// The set of named people present in this photo.
   Set<String> get people => {
@@ -126,6 +173,9 @@ class DetectedEntry {
         'detectedAt': detectedAt.toIso8601String(),
         'objects': [for (final o in objects) o.toMap()],
         'faces': [for (final f in faces) f.toMap()],
+        if (illustration) 'illustration': true,
+        if (styleChecked) 'styleChecked': true,
+        if (facesChecked) 'facesChecked': true,
       };
 }
 

@@ -9,19 +9,17 @@ import '../ml/faces.dart';
 import '../platform/contacts.dart';
 import '../state/app_state.dart';
 import 'contact_picker.dart';
+import 'person_detail_screen.dart';
 import 'unnamed_people_screen.dart';
-
-/// Result returned to the gallery when the user picks a filter target.
-class PeopleSelection {
-  const PeopleSelection({this.name});
-
-  final String? name;
-}
 
 /// Full-screen people browser: one photo tile per named person, type-ahead
 /// search at the top, and combine/edit/delete via each tile's menu.
 class PeopleScreen extends StatefulWidget {
-  const PeopleScreen({super.key, required this.state});
+  const PeopleScreen({super.key, required this.state, this.embedded = false});
+
+  /// True when hosted inside the desktop shell (which supplies the app bar
+  /// and the search field); a compact action row replaces the bar.
+  final bool embedded;
 
   final AppState state;
 
@@ -33,6 +31,7 @@ class _PeopleScreenState extends State<PeopleScreen> {
   final TextEditingController _search = TextEditingController();
   String _query = '';
   bool _selecting = false;
+  bool _showHidden = false;
   final Set<String> _selected = {};
 
   DetectionIndex get _index => widget.state.detectionIndex;
@@ -46,11 +45,27 @@ class _PeopleScreenState extends State<PeopleScreen> {
   List<PersonIdentity> get _visibleIdentities {
     final q = _query.trim().toLowerCase();
     final all = _index.identities;
-    if (q.isEmpty) return all;
+    // Hidden people stay out of the list unless explicitly revealed.
+    final base = _showHidden ? all : [for (final id in all) if (!id.hidden) id];
+    if (q.isEmpty) return base;
     return [
-      for (final id in all)
+      for (final id in base)
         if (id.allNames.any((n) => n.toLowerCase().contains(q))) id,
     ];
+  }
+
+  /// The tile source for [id]: its chosen cover photo when that photo still
+  /// has a face for them, else the automatic best face.
+  ({String linkId, Rect rect})? _coverSource(
+    PersonIdentity id,
+    Map<String, ({String linkId, Rect rect})> auto,
+  ) {
+    final chosen = id.coverLinkId;
+    if (chosen != null) {
+      final rect = _index.faceRectIn(chosen, id.name);
+      if (rect != null) return (linkId: chosen, rect: rect);
+    }
+    return auto[id.name];
   }
 
   void _toggleSelecting() {
@@ -60,20 +75,40 @@ class _PeopleScreenState extends State<PeopleScreen> {
     });
   }
 
-  void _onTileTap(PersonIdentity id) {
+  Future<void> _onTileTap(PersonIdentity id) async {
     if (_selecting) {
       setState(() {
         if (!_selected.add(id.name)) _selected.remove(id.name);
       });
       return;
     }
-    Navigator.pop(context, PeopleSelection(name: id.name));
+    // The tile opens the person page: cover, actions and their photos.
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PersonDetailScreen(
+          state: widget.state,
+          name: id.name,
+        ),
+      ),
+    );
   }
 
   Future<void> _onMenuAction(String action, PersonIdentity id) async {
     switch (action) {
       case 'edit':
         await _editIdentity(id);
+      case 'hide':
+        await _index.setPersonHidden(id.name, true);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${id.name} hidden from the timeline')),
+        );
+      case 'unhide':
+        await _index.setPersonHidden(id.name, false);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${id.name} shown in the timeline')),
+        );
       case 'link':
         await _linkContact(id);
       case 'unlink':
@@ -228,13 +263,24 @@ class _PeopleScreenState extends State<PeopleScreen> {
         final counts = _index.countPeople();
         final unnamedCount = counts[DetectionIndex.kUnnamedPeople] ?? 0;
         final searching = _query.trim().isNotEmpty;
-        final sources = _index.bestFaces();
+        final autoSources = _index.bestFaces();
+        // A hand-picked cover wins over the automatic best-face choice.
+        final sources = <String, ({String linkId, Rect rect})>{};
+        for (final id in identities) {
+          final src = _coverSource(id, autoSources);
+          if (src != null) sources[id.name] = src;
+        }
         final showUnnamed = !searching && !_selecting && unnamedCount > 0;
         final hasContent = identities.isNotEmpty || showUnnamed;
 
+        final shell = widget.embedded;
         return Scaffold(
           appBar: AppBar(
-            title: TextField(
+            automaticallyImplyLeading: false,
+            toolbarHeight: shell ? 48 : null,
+            title: shell
+                ? const Text('People')
+                : TextField(
               controller: _search,
               onChanged: (v) => setState(() => _query = v),
               textInputAction: TextInputAction.search,
@@ -261,6 +307,15 @@ class _PeopleScreenState extends State<PeopleScreen> {
               ),
             ),
             actions: [
+              if (_index.hiddenNames.isNotEmpty)
+                IconButton(
+                  tooltip: _showHidden ? 'Hide hidden people' : 'Show hidden people',
+                  icon: Icon(
+                    _showHidden ? Icons.visibility_off : Icons.visibility,
+                  ),
+                  onPressed: () =>
+                      setState(() => _showHidden = !_showHidden),
+                ),
               IconButton(
                 tooltip: _selecting ? 'Cancel selection' : 'Combine people',
                 icon: Icon(_selecting ? Icons.close : Icons.merge_type),
@@ -437,6 +492,20 @@ class _PersonCardState extends State<_PersonCard> {
                       onSelected: widget.onMenuAction!,
                     ),
                   ),
+                if (id != null && id.hidden)
+                  const Positioned(
+                    top: 6,
+                    left: 6,
+                    child: CircleAvatar(
+                      radius: 11,
+                      backgroundColor: Colors.black54,
+                      child: Icon(
+                        Icons.visibility_off,
+                        size: 13,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -477,6 +546,16 @@ class _TileMenu extends StatelessWidget {
         padding: EdgeInsets.zero,
         itemBuilder: (context) => [
           const PopupMenuItem(value: 'edit', child: Text('Edit names')),
+          if (identity.hidden)
+            const PopupMenuItem(
+              value: 'unhide',
+              child: Text('Show in timeline'),
+            )
+          else
+            const PopupMenuItem(
+              value: 'hide',
+              child: Text('Hide from timeline'),
+            ),
           if (Platform.isAndroid)
             identity.linkedToContact
                 ? const PopupMenuItem(

@@ -23,6 +23,12 @@ JAVA_HOME ?= /opt/homebrew/opt/openjdk@17
 # `sudo make install-linux PREFIX=/usr/local`.
 PREFIX    ?= $(HOME)/.local
 
+# Where install-mac puts the app bundle and CLI symlink. The app goes into
+# the user's Applications folder (no admin needed); the CLI goes into
+# MAC_PREFIX/bin (default ~/.local/bin, same convention as PREFIX).
+MAC_APPS   ?= $(HOME)/Applications
+MAC_PREFIX ?= $(PREFIX)
+
 # Immutable tag for the runtime files install-linux deploys. Each install goes
 # into its own <PREFIX>/lib/photon/versions/<BUILD_TAG>/ directory and a
 # 'current' symlink is swapped in afterwards. Installed files are never
@@ -59,6 +65,15 @@ build: submodules ## Build the photon Go binary (the serve sidecar)
 	mkdir -p build
 	go build -o $(PHOTON) .
 
+.PHONY: build-android-embed
+build-android-embed: ## Build photon for Android arm64 into the APK's jniLibs
+	@NDK_CLANG="$$(ls -d $(HOME)/Library/Android/sdk/ndk/*/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android24-clang 2>/dev/null | head -1)"; \
+	if [ -z "$$NDK_CLANG" ]; then echo "Android NDK not found (needed for cgo DNS resolution)"; exit 1; fi; \
+	mkdir -p app/android/app/src/main/jniLibs/arm64-v8a; \
+	CGO_ENABLED=1 GOOS=android GOARCH=arm64 CC="$$NDK_CLANG" \
+		go build -trimpath -ldflags="-s -w" \
+		-o app/android/app/src/main/jniLibs/arm64-v8a/libphotonserve.so .
+
 .PHONY: build-swift
 build-swift: ## Build the PhotoKit helper and menu bar app
 	swift build -c release --package-path swift-helper
@@ -81,7 +96,7 @@ run-linux: build ## Run the Flutter Linux desktop app (debug)
 	cd $(APP_DIR) && flutter run -d linux
 
 .PHONY: build-apk
-build-apk: ## Build the Flutter Android debug APK
+build-apk: build-android-embed ## Build the Flutter Android debug APK (embeds photon serve)
 	cd $(APP_DIR) && JAVA_HOME=$(JAVA_HOME) flutter build apk --debug
 
 .PHONY: run-android
@@ -134,6 +149,38 @@ build-all: build build-swift build-flutter build-apk build-linux ## Build every 
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
+
+.PHONY: install-mac
+install-mac: build-release ## Install the macOS app into ~/Applications (MAC_APPS) with embedded sidecar
+	@test ! -e '$(MAC_APPS)/Photon Library.app' \
+	  || { echo "error: $(MAC_APPS)/Photon Library.app already exists" >&2; \
+	       echo "       (remove it first: make uninstall-mac)" >&2; exit 1; }
+	@test -d '$(ROOT)/app/build/macos/Build/Products/Release/Photon Library.app' \
+	  || { echo "error: release build output missing" >&2; exit 1; }
+	mkdir -p '$(MAC_APPS)' '$(MAC_PREFIX)/bin'
+	cp -R '$(ROOT)/app/build/macos/Build/Products/Release/Photon Library.app' \
+	  '$(MAC_APPS)/Photon Library.app'
+	cp '$(ROOT)/build/photon' \
+	  '$(MAC_APPS)/Photon Library.app/Contents/Resources/photon'
+	chmod +x '$(MAC_APPS)/Photon Library.app/Contents/Resources/photon'
+	# Ad-hoc signing: the app is unsigned from flutter build; without a
+	# signature macOS may refuse to run it (or kill it after quarantining).
+	codesign --force --deep --sign - '$(MAC_APPS)/Photon Library.app' \
+	  2>/dev/null || true
+	ln -sfn '$(MAC_APPS)/Photon Library.app/Contents/Resources/photon' \
+	  '$(MAC_PREFIX)/bin/photon'
+	@echo "Installed Photon Library to '$(MAC_APPS)/Photon Library.app'"
+	@echo "CLI: $(MAC_PREFIX)/bin/photon (serve sidecar is embedded in the app)"
+
+.PHONY: uninstall-mac
+uninstall-mac: ## Remove the macOS app installed by install-mac (~/Applications)
+	# Stop a running instance first: deleting the bundle under a live app
+	# breaks its next launch (and the running binary's Resources path).
+	@osascript -e 'quit app "Photon Library"' 2>/dev/null || true
+	sleep 1
+	rm -rf '$(MAC_APPS)/Photon Library.app'
+	rm -f '$(MAC_PREFIX)/bin/photon'
+	@echo "Removed Photon Library from '$(MAC_APPS)'"
 
 .PHONY: install-linux
 install-linux: build-linux ## Install the Linux app into $(PREFIX) with a desktop entry
