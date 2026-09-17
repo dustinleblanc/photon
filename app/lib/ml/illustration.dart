@@ -1,5 +1,10 @@
+import 'dart:typed_data';
+import 'dart:ui' show Rect;
+
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
+
+import 'faces.dart';
 
 /// Cheap on-device "is this a photo or an illustration" heuristic.
 ///
@@ -122,6 +127,43 @@ IllustrationResult analyseIllustration(img.Image image) {
     isIllustration: histogram.length < kMaxIllustrationColors &&
         flatRatio > kMinIllustrationFlatness,
   );
+}
+
+/// A face crop that is this flat with this concentrated a palette is a
+/// drawing, not a photograph. Calibrated on real data: separates cartoon
+/// faces (flat p50 0.25, concentration 0.78) from real ones (0.09 / 0.49),
+/// catching roughly half of drawn faces while misclassifying only very soft
+/// real faces — whose embeddings are weak anyway.
+const double kDrawnFaceFlatness = 0.28;
+const double kDrawnFaceConcentration = 0.66;
+
+/// True when the decoded face [crop] looks drawn rather than photographed.
+bool looksDrawnFace(img.Image crop) {
+  final r = analyseIllustration(crop);
+  return r.flatRatio >= kDrawnFaceFlatness &&
+      r.paletteConcentration >= kDrawnFaceConcentration;
+}
+
+/// Isolate-friendly check for several faces at once: [args] carries the
+/// encoded image and each face's normalized rect as (x, y, x2, y2) quads.
+/// Returns one flag per rect (true = drawn), or null when undecodable.
+List<bool>? drawnFacesFromBytes((Uint8List, List<double>) args) {
+  final (bytes, coords) = args;
+  final decoded = img.decodeImage(bytes);
+  if (decoded == null) return null;
+  final out = <bool>[];
+  for (var i = 0; i + 3 < coords.length; i += 4) {
+    final rect = Rect.fromLTRB(
+      coords[i],
+      coords[i + 1],
+      coords[i + 2],
+      coords[i + 3],
+    );
+    final crop = cropFaceJpegFromDecoded(decoded, rect, size: 200);
+    final cropped = img.decodeImage(crop);
+    out.add(cropped != null && looksDrawnFace(cropped));
+  }
+  return out;
 }
 
 /// Decodes and classifies in a background isolate, so scanning a whole

@@ -496,11 +496,10 @@ class _CoverImageState extends State<_CoverImage> {
     }
     source ??= index.bestFaces()[id.name];
     if (source == null) return;
-    final decoded = await decodedPreviewFor(widget.state, source.linkId);
-    if (decoded == null || !mounted) return;
-    setState(() {
-      _crop = cropFaceJpegFromDecoded(decoded, source!.rect, size: 480);
-    });
+    final bytes =
+        await faceThumb(widget.state, source.linkId, source.rect, size: 400);
+    if (!mounted) return;
+    setState(() => _crop = bytes);
   }
 
   @override
@@ -554,11 +553,10 @@ class _CoverOptionState extends State<_CoverOption> {
     final index = widget.state.detectionIndex;
     final rect = index.faceRectIn(widget.linkId, widget.name);
     if (rect == null) return;
-    final decoded = await decodedPreviewFor(widget.state, widget.linkId);
-    if (decoded == null || !mounted) return;
-    setState(() {
-      _crop = cropFaceJpegFromDecoded(decoded, rect, size: 160);
-    });
+    final bytes =
+        await faceThumb(widget.state, widget.linkId, rect, size: 160);
+    if (!mounted) return;
+    setState(() => _crop = bytes);
   }
 
   @override

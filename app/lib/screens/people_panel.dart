@@ -70,6 +70,17 @@ class _PeoplePanelState extends State<PeoplePanel> {
           } finally {
             await svc.dispose();
           }
+          // Drop faces whose crop looks drawn (cartoon face in a photo).
+          faces = [
+            for (final f in faces)
+              if (!looksDrawnFace(
+                img.decodeImage(
+                      cropFaceJpegFromDecoded(decoded, f.rect, size: 200),
+                    ) ??
+                    decoded,
+              ))
+                f,
+          ];
           autoMatchFaces(faces, matcher: _index.faceMatcher());
           if (faces.isNotEmpty || _index.lookup(widget.linkId) != null) {
             final existing = _index.lookup(widget.linkId);

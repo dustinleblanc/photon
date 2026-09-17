@@ -37,6 +37,15 @@ Future<void> main() async {
   stderr.writeln('perf: reconcileAutoAssigned=${m2.elapsedMilliseconds}ms '
       'rematchUnnamed=${m3.elapsedMilliseconds}ms');
 
+  final b1 = Stopwatch()..start();
+  index.bestFaces();
+  b1.stop();
+  final b2 = Stopwatch()..start();
+  index.bestFaces();
+  b2.stop();
+  stderr.writeln('perf: bestFaces cold=${b1.elapsedMilliseconds}ms '
+      'warm=${b2.elapsedMilliseconds}ms');
+
   final c1 = Stopwatch()..start();
   index.countPeople();
   c1.stop();

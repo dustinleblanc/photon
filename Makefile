@@ -101,9 +101,19 @@ run-linux: build ## Run the Flutter Linux desktop app (debug)
 build-apk: build-android-embed ## Build the Flutter Android debug APK (embeds photon serve)
 	cd $(APP_DIR) && JAVA_HOME=$(JAVA_HOME) flutter build apk --debug
 
+.PHONY: dev-mac
+dev-mac: build ## Run the macOS app with hot reload (r=reload, R=restart, q=quit)
+	cd $(APP_DIR) && JAVA_HOME=$(JAVA_HOME) flutter run -d macos
+
+.PHONY: dev-android
+dev-android: android-wifi-connect ## Run on the phone over Wi-Fi with hot reload (r/R/q)
+	cd $(APP_DIR) && JAVA_HOME=$(JAVA_HOME) flutter run \
+	  -d "$$($(ADB) devices | awk '/device$$/ {print $$1; exit}')"
+
 .PHONY: run-android
-run-android: ## Run the Flutter app on a connected Android device
-	cd $(APP_DIR) && JAVA_HOME=$(JAVA_HOME) flutter run -d android
+run-android: android-wifi-connect ## Alias for dev-android
+	cd $(APP_DIR) && JAVA_HOME=$(JAVA_HOME) flutter run \
+	  -d "$$($(ADB) devices | awk '/device$$/ {print $$1; exit}')"
 
 .PHONY: android-wifi-connect
 android-wifi-connect: ## Connect to the phone over Wi-Fi (auto-discovers it on the LAN)

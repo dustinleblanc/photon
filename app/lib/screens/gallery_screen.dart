@@ -29,14 +29,36 @@ class _GalleryScreenState extends State<GalleryScreen> {
   DetectionGroup? _filter;
   bool _preparingScan = false;
 
+  bool _wasScanning = false;
+
   @override
   void initState() {
     super.initState();
     _scroll.addListener(_onScroll);
+    widget.state.detector.addListener(_onScannerChanged);
+  }
+
+  /// Scans used to fail silently (the error was stored but never shown).
+  void _onScannerChanged() {
+    final scanner = widget.state.detector;
+    final running = scanner.running;
+    if (_wasScanning && !running && mounted) {
+      final error = scanner.error;
+      final message = error != null
+          ? 'Scan failed: $error'
+          : scanner.scanned == 0
+              ? 'Nothing to scan — ${scanner.total} photos already processed'
+              : 'Scanned ${scanner.scanned} photos';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    }
+    _wasScanning = running;
   }
 
   @override
   void dispose() {
+    widget.state.detector.removeListener(_onScannerChanged);
     _scroll.dispose();
     super.dispose();
   }
@@ -136,13 +158,16 @@ class _GalleryScreenState extends State<GalleryScreen> {
           return Column(
             children: [
               // Scan progress changes once per processed photo; keep it in its
-              // own listener so it doesn't rebuild the photo grid.
-              ListenableBuilder(
-                listenable: scanner,
-                builder: (context, _) => scanner.running
-                    ? _ScanProgress(scanner: scanner)
-                    : const SizedBox.shrink(),
-              ),
+              // own listener so it doesn't rebuild the photo grid. On desktop
+              // the shell's top bar owns the progress meter, so this one is
+              // only shown on mobile (non-embedded).
+              if (!widget.embedded)
+                ListenableBuilder(
+                  listenable: scanner,
+                  builder: (context, _) => scanner.running
+                      ? _ScanProgress(scanner: scanner)
+                      : const SizedBox.shrink(),
+                ),
               _FilterBar(
                 selected: _filter,
                 scannedCount: index.scannedCount,

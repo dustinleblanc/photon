@@ -45,6 +45,29 @@ void main() {
         reason: 'colors=${result.uniqueColors} flat=${result.flatRatio}');
   });
 
+  test('a drawn-looking face crop is detected', () {
+    final drawn = img.Image(width: 100, height: 100);
+    img.fillRect(drawn, x1: 0, y1: 0, x2: 99, y2: 99,
+        color: img.ColorRgb8(240, 200, 170));
+    img.fillCircle(drawn, x: 35, y: 40, radius: 8,
+        color: img.ColorRgb8(30, 30, 30));
+    img.fillCircle(drawn, x: 65, y: 40, radius: 8,
+        color: img.ColorRgb8(30, 30, 30));
+    img.fillRect(drawn, x1: 35, y1: 70, x2: 65, y2: 74,
+        color: img.ColorRgb8(160, 40, 40));
+    expect(looksDrawnFace(drawn), isTrue);
+
+    final rng = Random(7);
+    final photo = img.Image(width: 100, height: 100);
+    for (var y = 0; y < 100; y++) {
+      for (var x = 0; x < 100; x++) {
+        photo.setPixelRgb(x, y, rng.nextInt(256), rng.nextInt(256),
+            rng.nextInt(256));
+      }
+    }
+    expect(looksDrawnFace(photo), isFalse);
+  });
+
   test('illustration flag adds the Illustrations group', () {
     final entry = DetectedEntry(
       linkId: 'x',

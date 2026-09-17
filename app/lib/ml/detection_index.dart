@@ -1,5 +1,6 @@
 import 'dart:ui' show Rect;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -34,6 +35,11 @@ class DetectionIndex extends ChangeNotifier {
 
   /// Memoized [countPeople] result; dropped on every index change.
   Map<String, int>? _peopleCounts;
+
+  /// Memoized [bestFaces] result; dropped on every index change. It walks the
+  /// whole library, so recomputing it on every People-page build (tab
+  /// switches, scroll rebuilds) was a noticeable lag.
+  Map<String, ({String linkId, Rect rect})>? _bestFacesCache;
   Object? _openError;
   bool _initializing = false;
 
@@ -249,10 +255,31 @@ class DetectionIndex extends ChangeNotifier {
   /// Notify listeners, dropping the identity cache first so a rebuild always
   /// sees current data. Every mutation path calls this (directly or via
   /// put/notifyListeners).
+  DateTime _lastNotify = DateTime.fromMillisecondsSinceEpoch(0);
+  Timer? _notifyTimer;
+
+  /// Coalesced change notification. During a scan the index changes once per
+  /// photo; notifying on each one made every screen (and the People grid)
+  /// rebuild dozens of times a minute, which is what made scrolling and tab
+  /// switches jittery. Bursts are collapsed to at most one notification per
+  /// [_notifyInterval].
+  static const _notifyInterval = Duration(milliseconds: 120);
+
   void _notify() {
     _identitiesCache = null;
     _peopleCounts = null;
-    notifyListeners();
+    _bestFacesCache = null;
+    final elapsed = DateTime.now().difference(_lastNotify);
+    if (elapsed >= _notifyInterval) {
+      _lastNotify = DateTime.now();
+      notifyListeners();
+      return;
+    }
+    _notifyTimer ??= Timer(_notifyInterval - elapsed, () {
+      _notifyTimer = null;
+      _lastNotify = DateTime.now();
+      notifyListeners();
+    });
   }
 
   /// Identity write that invalidates the decoded-identity cache. Used instead
@@ -337,6 +364,8 @@ class DetectionIndex extends ChangeNotifier {
   /// low-confidence mis-tag never becomes someone's portrait. Pure lookup
   /// over the detection box; callers fetch and crop the photo themselves.
   Map<String, ({String linkId, Rect rect})> bestFaces() {
+    final cached = _bestFacesCache;
+    if (cached != null) return cached;
     final box = _box;
     if (box == null) return const {};
     final best = <String, ({String linkId, Rect rect, double area, double sim})>{};
@@ -357,10 +386,12 @@ class DetectionIndex extends ChangeNotifier {
         }
       }
     }
-    return {
+    final out = {
       for (final e in best.entries)
         e.key: (linkId: e.value.linkId, rect: e.value.rect),
     };
+    _bestFacesCache = out;
+    return out;
   }
 
   /// Every detected-but-unnamed, non-ignored face across the library, in
@@ -380,6 +411,37 @@ class DetectionIndex extends ChangeNotifier {
       }
     }
     return out;
+  }
+
+  /// Groups unnamed faces that look like the same unknown person, so the
+  /// worklist shows one tile per person instead of one per photo. Greedy
+  /// medoid clustering at [threshold] (conservative: relatives are the risk,
+  /// and a merged tile names every member when confirmed).
+  List<List<({String linkId, int faceIndex, Rect rect})>> unnamedClusters({
+    double threshold = 0.72,
+  }) {
+    final faces = unnamedFaces();
+    final clusters = <List<({String linkId, int faceIndex, Rect rect})>>[];
+    final medoids = <Float32List>[];
+    for (final f in faces) {
+      final entry = lookup(f.linkId);
+      if (entry == null || f.faceIndex >= entry.faces.length) continue;
+      final emb = entry.faces[f.faceIndex].embedding;
+      if (emb.isEmpty) continue;
+      var placed = false;
+      for (var i = 0; i < medoids.length; i++) {
+        if (faceMatchScore(emb, medoids[i]) >= threshold) {
+          clusters[i].add(f);
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) {
+        medoids.add(emb);
+        clusters.add([f]);
+      }
+    }
+    return clusters;
   }
 
   /// Marks the face at [faceIndex] of [linkId] as ignored: it stops counting
@@ -426,7 +488,11 @@ class DetectionIndex extends ChangeNotifier {
     final target = source[faceIndex].embedding;
     if (target.isEmpty) return 0;
     var count = 0;
-    for (final key in box.keys.toList()) {
+    final keys = box.keys.toList();
+    for (var k = 0; k < keys.length; k++) {
+      final key = keys[k];
+      // Yield periodically so a library-wide ignore keeps the UI responsive.
+      if (k % 200 == 0) await Future<void>.delayed(Duration.zero);
       final entry = lookup(key as String);
       if (entry == null) continue;
       var changed = false;
@@ -623,7 +689,10 @@ class DetectionIndex extends ChangeNotifier {
 
     var repaired = 0;
     var cleared = 0;
+    var processed = 0;
     for (final id in identities) {
+      // Keep the UI painting across a whole-library repair.
+      if (processed++ % 5 == 0) await Future<void>.delayed(Duration.zero);
       final list = byName[id.name];
       if (list == null || list.length < 3) continue;
       final keepList = coherentSamples([for (final s in list) s.emb]);
@@ -1408,6 +1477,8 @@ class DetectionIndex extends ChangeNotifier {
 
   @override
   Future<void> dispose() async {
+    _notifyTimer?.cancel();
+    _notifyTimer = null;
     await _box?.close();
     _box = null;
     await _identitiesBox?.close();
