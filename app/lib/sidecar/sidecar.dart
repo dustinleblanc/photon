@@ -2,10 +2,26 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:path_provider/path_provider.dart';
+
 import '../api/serve_client.dart';
 
+/// Manages the loopback API the app talks to.
+///
+/// On Android the whole `photon serve` binary ships inside the APK and runs
+/// as a child process on the phone itself, so no host machine or adb reverse
+/// is needed. On desktop the sidecar is the repo's photon binary, spawned as
+/// before.
 class Sidecar {
   Sidecar({this.port = 8787, this.binaryOverride});
+
+  static const _serveChannel = MethodChannel(
+    'com.dustinleblanc.photon.library/serve',
+  );
+  static const _storage = FlutterSecureStorage();
+  static const _sessionKey = 'photon_embedded_session';
 
   final int port;
   final String? binaryOverride;
@@ -35,16 +51,7 @@ class Sidecar {
     required String sessionOutPath,
   }) async {
     if (Platform.isAndroid) {
-      // No local sidecar on Android: run `photon serve` on the host and
-      // expose it via `adb reverse tcp:8787 tcp:8787`.
-      final healthy = await _probe();
-      if (!healthy) {
-        throw ApiException(
-          'No photon server reachable. Run `photon serve` on your Mac, then '
-          'forward it: adb reverse tcp:8787 tcp:8787',
-        );
-      }
-      return true;
+      return _startEmbedded();
     }
 
     if (await _probe()) return true;
@@ -80,13 +87,46 @@ class Sidecar {
     return healthy;
   }
 
+  /// Starts the embedded on-device server. The session (if any) comes from
+  /// secure storage; a fresh login persists it there via [persistSession].
+  Future<bool> _startEmbedded() async {
+    if (await _probe()) return true;
+    try {
+      final sessionJson = await _storage.read(key: _sessionKey);
+      final dir = await getApplicationDocumentsDirectory();
+      final sessionOut = '${dir.path}/session.json';
+      final ok = await _serveChannel.invokeMethod<bool>('start', {
+        'sessionJson': sessionJson ?? '',
+        'sessionOutPath': sessionOut,
+      });
+      if (ok != true) return false;
+      return await _pollHealthy(const Duration(seconds: 15));
+    } on PlatformException {
+      return false;
+    }
+  }
+
+  /// Reads the session file the embedded server writes and stores it in
+  /// secure storage, so the next launch resumes without a re-login.
+  Future<void> persistSession() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/session.json');
+      if (!file.existsSync()) return;
+      final json = file.readAsStringSync();
+      if (json.isNotEmpty) {
+        await _storage.write(key: _sessionKey, value: json);
+      }
+    } catch (_) {}
+  }
+
   Future<bool> _pollHealthy(Duration timeout) async {
     final client = ServeClient(url: baseUrl);
     try {
       final deadline = DateTime.now().add(timeout);
       while (DateTime.now().isBefore(deadline)) {
         if (await client.health()) return true;
-        if (_process == null) return false;
         await Future<void>.delayed(const Duration(milliseconds: 200));
       }
       return false;
@@ -96,6 +136,12 @@ class Sidecar {
   }
 
   Future<void> stop() async {
+    if (Platform.isAndroid) {
+      try {
+        await _serveChannel.invokeMethod<void>('stop');
+      } catch (_) {}
+      return;
+    }
     final p = _process;
     _process = null;
     if (p != null && _startedHere) {

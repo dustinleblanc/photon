@@ -115,7 +115,10 @@ class _UnnamedFaceTileState extends State<_UnnamedFaceTile> {
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      await _index.ignoreFace(widget.face.linkId, widget.face.faceIndex);
+      await _index.ignoreFaceEverywhere(
+        widget.face.linkId,
+        widget.face.faceIndex,
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }

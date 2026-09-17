@@ -149,6 +149,9 @@ class AppState extends ChangeNotifier {
       switch (result.outcome) {
         case LoginOutcome.ok:
           _persistRotatedSession();
+          // The embedded on-device server writes its session to a file;
+          // copy it into secure storage so the next launch resumes.
+          await _sidecar.persistSession();
           _phase = AppPhase.ready;
           notifyListeners();
           await loadMore();
@@ -217,6 +220,17 @@ class AppState extends ChangeNotifier {
       cursor = next;
     }
     return ids.toList();
+  }
+
+  /// Fetches every remaining page of the library. Filters run over the
+  /// loaded photo list, so a filtered view over a partially-loaded library
+  /// undercounts and never reaches the photos that would match; callers
+  /// (person/group filters) use this to make counts and grids agree.
+  Future<void> loadAll() async {
+    while (hasMore) {
+      await loadMore();
+      if (_error != null) return;
+    }
   }
 
   Future<Uint8List> preview(String linkId, {int size = 512}) {

@@ -22,12 +22,14 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
 
     private val GALLERY_CHANNEL = "com.dustinleblanc.photon.library/gallery"
     private val CONTACTS_CHANNEL = "com.dustinleblanc.photon.library/contacts"
+    private val SERVE_CHANNEL = "com.dustinleblanc.photon.library/serve"
     private val PERMISSION_REQUEST_CODE = 1001
     private val CONTACTS_PERMISSION_REQUEST_CODE = 1002
     private val ioExecutor = Executors.newSingleThreadExecutor()
@@ -41,6 +43,10 @@ class MainActivity : FlutterActivity() {
 
     private var pendingSave: PendingSave? = null
     private var pendingContactsAction: ((Boolean) -> Unit)? = null
+
+    // The embedded photon serve process: runs the whole loopback API
+    // on-device so the app never needs a host machine or adb reverse.
+    private var serveProcess: Process? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -90,6 +96,74 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SERVE_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "start" -> {
+                        val sessionJson = call.argument<String>("sessionJson") ?: ""
+                        val sessionOutPath = call.argument<String>("sessionOutPath") ?: ""
+                        handleServeStart(sessionJson, sessionOutPath, result)
+                    }
+                    "stop" -> handleServeStop(result)
+                    "running" -> result.success(serveProcess?.isAlive == true)
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    private fun handleServeStart(sessionJson: String, sessionOutPath: String, result: MethodChannel.Result) {
+        ioExecutor.execute {
+            if (serveProcess?.isAlive == true) {
+                runOnUiThread { result.success(true) }
+                return@execute
+            }
+            val binary = File(applicationInfo.nativeLibraryDir, "libphotonserve.so")
+            if (!binary.exists() || !binary.canExecute()) {
+                runOnUiThread {
+                    result.error("NO_BINARY", "Embedded photon serve not available for this ABI", null)
+                }
+                return@execute
+            }
+            try {
+                val args = mutableListOf(
+                    binary.absolutePath,
+                    "serve",
+                    "--addr", "127.0.0.1:8787",
+                )
+                if (sessionOutPath.isNotEmpty()) {
+                    args.addAll(listOf("--session-out", sessionOutPath))
+                }
+                val builder = ProcessBuilder(args).redirectErrorStream(true)
+                val env = builder.environment()
+                if (sessionJson.isNotEmpty()) {
+                    env["PROTON_UPLOAD_SESSION_JSON"] = sessionJson
+                }
+                val process = builder.start()
+                serveProcess = process
+                // Drain output so the pipe never fills and blocks the child.
+                Thread {
+                    try {
+                        process.inputStream.bufferedReader().forEachLine { line ->
+                            Log.d("PhotonServe", line)
+                        }
+                    } catch (_: Exception) {}
+                }.start()
+                runOnUiThread { result.success(true) }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    result.error("START_FAILED", e.message, null)
+                }
+            }
+        }
+    }
+
+    private fun handleServeStop(result: MethodChannel.Result) {
+        ioExecutor.execute {
+            serveProcess?.destroy()
+            serveProcess = null
+            runOnUiThread { result.success(true) }
+        }
     }
 
     private fun handleSave(

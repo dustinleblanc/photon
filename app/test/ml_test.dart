@@ -142,6 +142,71 @@ void main() {
     expect(restored.linkedToContact, isTrue);
   });
 
+  test('coherentSamples keeps the tight cluster and drops outliers', () {
+    Float32List at(int axis) {
+      final v = Float32List(192);
+      v[axis] = 1;
+      return v;
+    }
+
+    final samples = [
+      at(0),
+      Float32List.fromList([
+        for (var i = 0; i < 192; i++) i == 0 ? 0.98 : (i == 1 ? 0.199 : 0),
+      ]),
+      Float32List.fromList([
+        for (var i = 0; i < 192; i++) i == 0 ? 0.97 : (i == 2 ? 0.243 : 0),
+      ]),
+      at(0),
+      at(0),
+      at(5), // contaminated: a different person
+    ];
+
+    final keep = coherentSamples(samples);
+
+    expect(keep, isNot(contains(5)));
+    expect(keep.length, greaterThanOrEqualTo(4));
+    expect(trimSamples(samples).length, keep.length);
+  });
+
+  test('coherentSamples keeps everything when there are too few samples', () {
+    final samples = [
+      Float32List(192)..[0] = 1,
+      Float32List(192)..[5] = 1,
+    ];
+    expect(coherentSamples(samples), [0, 1]);
+  });
+
+  test('PersonIdentity roundtrips the hidden flag', () {
+    final id = PersonIdentity(
+      name: 'Ex',
+      centroid: Float32List.fromList([1, 0]),
+      faceSamples: 1,
+      hidden: true,
+    );
+    final restored = PersonIdentity.fromMap(id.toMap());
+    expect(restored.hidden, isTrue);
+    expect(restored.copyWith(hidden: false).hidden, isFalse);
+  });
+
+  test('mergePeople stays hidden if any merged person was hidden', () {
+    final a = PersonIdentity(
+      name: 'Ex',
+      centroid: Float32List.fromList([1, 0]),
+      faceSamples: 1,
+      hidden: true,
+    );
+    final b = PersonIdentity(
+      name: 'Dana',
+      centroid: Float32List.fromList([0, 1]),
+      faceSamples: 1,
+    );
+
+    expect(mergePeople([a, b]).hidden, isTrue);
+    expect(mergePeople([b, a]).hidden, isTrue);
+    expect(mergePeople([b]).hidden, isFalse);
+  });
+
   test('mergePeople keeps the first person\'s contact link', () {
     final a = PersonIdentity(
       name: 'Mom',

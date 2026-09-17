@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-13
+
+### Added
+
+- Desktop shell: a persistent left navigation rail (Library, People) with a
+  persistent top bar that always offers search (type-ahead over people,
+  names and aliases), background-task progress with stop, settings, and a
+  context menu (scan, classify, sync, sign out). Sub-pages push inside the
+  shell and always get a back button, so a person page returns to all people.
+  Mobile keeps its existing per-screen layout.
+- Person pages: a person's profile and their photos in one place — cover
+  photo (pick any of their faces), rename & aliases, hide from timeline,
+  clear their face tags, delete. Tapping a person from People opens this.
+- Hidden people: kept out of the default gallery and group filters; their
+  photos still appear when you explicitly view that person.
+- Illustrations are detected from image statistics (flat regions + small
+  palette) **before** the face pass, so drawings, screenshots and memes are
+  categorised under a new "Illustrations" filter and never feed face matching.
+  Can be marked/unmarked by hand, and classified or re-classified from
+  Settings (re-classification also clears stale flags).
+- Ignore a face *wherever it appears*: ignoring a face un-tags and ignores
+  every matching face across the library (e.g. an unknown guest repeatedly
+  auto-tagged as someone), removing them from people matching in one step.
+- Retagging a face now re-evaluates auto-tagged faces elsewhere and moves
+  any that now match the corrected person more strongly. Manually confirmed
+  tags are never overridden.
+- Face data controls in Settings: repair people profiles (drop wrong-looking
+  confirmations, rebuild each person's profile, clear sets that don't
+  cohere), clear all face tags (untag, keep faces), and reset the ML index
+  (wipe detections/faces/people and re-scan from zero).
+- The Android app now runs the whole serving stack on-device: the photon
+  binary ships inside the APK and runs as a child process, so no host machine
+  or `adb reverse` is needed. The session is stored in secure storage.
+
+### Changed
+
+- Face matching is strict and robust. Automatic naming now requires 0.70
+  similarity (was 0.60), the per-sample threshold easing was removed, a match
+  must also be broadly close to the identity's centroid (not just one sample),
+  and lookalikes within the ambiguity margin stay unnamed. Identity profiles
+  are built from a medoid-consensus subset of confirmed samples, so
+  contaminated sample sets no longer drag a centroid; tiny faces are excluded
+  as evidence because their embeddings barely separate people.
+- Scanning is self-healing: photos whose face pass hasn't run (or whose faces
+  were cleared) are re-processed by a normal scan; entries are only skipped
+  once fully processed. Illustration classification is off the UI thread.
+
+### Fixed
+
+- "Clear all face tags" was deleting faces (and their embeddings) rather than
+  untagging them, which emptied the unnamed-people queue; it now clears names
+  and people while keeping faces, so they can be re-named. A separate "reset"
+  drops detections entirely.
+- The person page and filtered grids could freeze the app: entry decodes,
+  identity lookups and people counts were recomputed over the whole library on
+  every rebuild. Decoded entries and identities are now cached (invalidated at
+  write sites), counts are memoized, and predicates avoid per-photo
+  allocations.
+- Person tiles could show a different person's face: thumbnails now rank by
+  confidence (manually confirmed first, then similarity) rather than raw size.
+- Classify/re-classify illustrations silently did nothing when everything was
+  already checked; both now report what they did, and re-classifying correctly
+  clears photos that are no longer illustrations.
+
 ## [0.9.0] - 2026-09-13
 
 ### Added

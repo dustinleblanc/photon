@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -140,6 +141,32 @@ class _LightboxPageState extends State<_LightboxPage> {
                 onTap: () {
                   Navigator.pop(sheetContext);
                   _showPeople();
+                },
+              ),
+              ListenableBuilder(
+                listenable: widget.state.detectionIndex,
+                builder: (context, _) {
+                  final marked = widget.state.detectionIndex
+                          .lookup(widget.linkId)
+                          ?.illustration ??
+                      false;
+                  return ListTile(
+                    leading: const Icon(Icons.brush),
+                    title: Text(
+                      marked ? 'Illustration' : 'Mark as illustration',
+                    ),
+                    subtitle: marked
+                        ? const Text('Excluded from people matching')
+                        : null,
+                    enabled: !_busy,
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      unawaited(
+                        widget.state.detectionIndex
+                            .setIllustration(widget.linkId, !marked),
+                      );
+                    },
+                  );
                 },
               ),
               ListTile(
