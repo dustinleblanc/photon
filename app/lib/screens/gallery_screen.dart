@@ -9,6 +9,7 @@ import '../ml/detection_index.dart';
 import '../ml/library_scanner.dart';
 import '../state/app_state.dart';
 import 'lightbox_screen.dart';
+import 'login_screen.dart';
 import 'photo_tile.dart';
 import 'settings_screen.dart';
 class GalleryScreen extends StatefulWidget {
@@ -154,6 +155,9 @@ class _GalleryScreenState extends State<GalleryScreen> {
           }
           if (photos.isEmpty && state.loading) {
             return const Center(child: CircularProgressIndicator());
+          }
+          if (photos.isEmpty && state.needsReconnect) {
+            return _ReconnectView(state: state);
           }
           if (photos.isEmpty) {
             return const Center(child: Text('No photos yet.'));
@@ -347,6 +351,52 @@ class _EmptyFilter extends StatelessWidget {
         ? 'No photos with “$label” yet.'
         : 'No ${groups!.first.label.toLowerCase()} photos yet.';
     return Center(child: Text(message));
+  }
+}
+
+/// Shown when this device has an account but its Proton session can't be
+/// resumed (expired or signed out). Local content still works; this only
+/// gates fetching new photos.
+class _ReconnectView extends StatelessWidget {
+  const _ReconnectView({required this.state});
+
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.cloud_off, size: 40),
+            const SizedBox(height: 12),
+            const Text(
+              'Not connected to Proton',
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Your people, tags and cached previews are still available. '
+              'Sign in to load the rest of the library.',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: () => Navigator.of(context, rootNavigator: true).push(
+                MaterialPageRoute(
+                  builder: (_) => LoginScreen(state: state),
+                ),
+              ),
+              icon: const Icon(Icons.login),
+              label: const Text('Sign in'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

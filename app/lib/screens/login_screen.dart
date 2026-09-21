@@ -35,11 +35,14 @@ class _LoginScreenState extends State<LoginScreen> {
       password: _password.text,
       totp: requireTotp ? _totp.text.trim() : null,
     );
-    if (mounted) {
-      setState(() => _busy = false);
-      if (widget.state.totpRequired && !requireTotp) {
-        _totpFocus.requestFocus();
-      }
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (widget.state.remoteAuthenticated &&
+        Navigator.of(context).canPop()) {
+      // Pushed as a reconnect route from behind the local UI: drop back to it.
+      Navigator.of(context).pop();
+    } else if (widget.state.totpRequired && !requireTotp) {
+      _totpFocus.requestFocus();
     }
   }
 

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../api/models.dart';
 import '../api/serve_client.dart';
@@ -11,7 +12,11 @@ import '../platform/preview_cache.dart';
 import '../sidecar/sidecar.dart';
 import '../sync/tags_sync.dart';
 
-enum AppPhase { booting, loggedOut, ready }
+/// Where the app is in its *local* lifecycle. Remote (Proton) authentication
+/// is tracked separately via [AppState.remoteAuthenticated], so local content
+/// — cached previews, the people index, tags — stays browsable even when the
+/// session is missing or has expired.
+enum AppPhase { booting, onboarding, ready }
 
 /// Per-user app data directory: ~/Library/Application Support on macOS (as
 /// before), $XDG_DATA_HOME (default ~/.local/share) on Linux. Returns null on
@@ -46,14 +51,39 @@ class AppState extends ChangeNotifier {
   /// On-device, encrypted-at-rest detection index. Android only.
   final DetectionIndex detectionIndex = DetectionIndex();
 
-  /// Cross-device people-tag sync through the host (opt-in).
-  late final TagsSync tagsSync = TagsSync(client: _client, index: detectionIndex);
+  /// Cross-device people-tag sync through the host (opt-in). Remote-only, so
+  /// it stays dormant unless a live Proton session is held.
+  late final TagsSync tagsSync = TagsSync(
+    client: _client,
+    index: detectionIndex,
+    canSync: () => _remoteAuthenticated != false,
+  );
 
   /// Batch object-detection job over the loaded library.
   late final LibraryScanner detector;
 
   AppPhase _phase = AppPhase.booting;
   AppPhase get phase => _phase;
+
+  static const _storage = FlutterSecureStorage();
+  static const _keyProvisioned = 'photon_provisioned';
+
+  /// Tri-state: null until the sidecar has been probed, then whether a live
+  /// Proton session is held. A null lets remote-only calls proceed before the
+  /// first probe (and in tests) instead of being wrongly short-circuited.
+  bool? _remoteAuthenticated;
+
+  /// True once this device has ever held an account (a login succeeded or a
+  /// session was persisted). Distinguishes "sign in again" from a fresh
+  /// install, so an expired session doesn't hide local content.
+  bool _provisioned = false;
+
+  /// True only when a usable Proton session is held.
+  bool get remoteAuthenticated => _remoteAuthenticated == true;
+
+  /// True when a previously-provisioned account can't currently be resumed, so
+  /// the UI offers to reconnect instead of showing the first-run login.
+  bool get needsReconnect => _provisioned && _remoteAuthenticated == false;
 
   String? _error;
   String? get error => _error;
@@ -64,7 +94,7 @@ class AppState extends ChangeNotifier {
   @visibleForTesting
   void requireTotpForTest() {
     _totpRequired = true;
-    _phase = AppPhase.loggedOut;
+    _phase = AppPhase.onboarding;
   }
 
   final List<Photo> _photos = [];
@@ -86,31 +116,83 @@ class AppState extends ChangeNotifier {
     try {
       _prepareSessionFiles();
       await _previewDisk.init();
-      final healthy = await _sidecar.start(
-        sessionJson: _savedSessionJson,
-        sessionOutPath: _sessionOutPath,
-      );
-      if (healthy) {
-        // The sidecar refreshes the Proton session as it runs and writes it to
-        // sessionOutPath; persist that so the next launch resumes with the
-        // current tokens instead of the ones from the last explicit login.
-        _persistRotatedSession();
-        final authenticated = await _client.session();
-        _phase = authenticated ? AppPhase.ready : AppPhase.loggedOut;
-      } else {
-        _error = 'photon sidecar is not running';
-        _phase = AppPhase.loggedOut;
+      _provisioned = await _loadProvisioned();
+
+      try {
+        final healthy = await _sidecar.start(
+          sessionJson: _savedSessionJson,
+          sessionOutPath: _sessionOutPath,
+        );
+        if (healthy) {
+          // The sidecar refreshes the Proton session as it runs and writes it
+          // to sessionOutPath; capture that now, then keep mirroring rotations
+          // so the next launch resumes with the current tokens instead of a
+          // stale refresh token that Proton has already invalidated.
+          await _sidecar.persistSession();
+          await _sidecar.startSessionMirror();
+          _persistRotatedSession();
+          _remoteAuthenticated = await _client.session();
+        } else {
+          _error = 'photon sidecar is not running';
+          _remoteAuthenticated = false;
+        }
+      } catch (e) {
+        // A missing sidecar binary must not brick local browsing: fall back to
+        // whatever is cached on disk and surface the error non-fatally.
+        _error = e.toString();
+        _remoteAuthenticated = false;
       }
-    } catch (e) {
-      _error = e.toString();
-      _phase = AppPhase.loggedOut;
-    }
-    notifyListeners();
-    if (_phase == AppPhase.ready) {
-      await loadMore();
+
+      _provisioned = _provisioned || remoteAuthenticated;
+      if (remoteAuthenticated) unawaited(_markProvisioned());
+
+      // Local stores open regardless of remote auth so the People index and
+      // tags remain available offline.
       unawaited(detectionIndex.init());
       unawaited(tagsSync.init());
+
+      _phase = _provisioned ? AppPhase.ready : AppPhase.onboarding;
+    } catch (e) {
+      _error = e.toString();
+      _phase = AppPhase.onboarding;
     }
+    notifyListeners();
+    if (_phase == AppPhase.ready && remoteAuthenticated) {
+      await loadMore();
+    }
+  }
+
+  /// A device is "provisioned" once it has a stored Proton session (Android
+  /// secure storage / the desktop session file) or has previously recorded a
+  /// successful login. Local data outlives the session.
+  Future<bool> _loadProvisioned() async {
+    if (Platform.isAndroid && await _sidecar.hasStoredSession()) return true;
+    if (!Platform.isAndroid && (_savedSessionJson ?? '').isNotEmpty) {
+      return true;
+    }
+    try {
+      return (await _storage.read(key: _keyProvisioned)) == '1';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _markProvisioned() async {
+    _provisioned = true;
+    try {
+      await _storage.write(key: _keyProvisioned, value: '1');
+    } catch (_) {
+      // Desktop builds without keychain entitlements can't use secure storage;
+      // the session file existence still marks the device as provisioned.
+    }
+  }
+
+  /// Mirrors the current (possibly rotated) session to persistent storage.
+  /// Called when the app is backgrounded so a rotation the file watcher missed
+  /// is still captured before the process can be suspended or killed.
+  Future<void> flushSession() async {
+    await _sidecar.persistSession();
+    _persistRotatedSession();
   }
 
   void _prepareSessionFiles() {
@@ -150,8 +232,12 @@ class AppState extends ChangeNotifier {
         case LoginOutcome.ok:
           _persistRotatedSession();
           // The embedded on-device server writes its session to a file;
-          // copy it into secure storage so the next launch resumes.
+          // copy it into secure storage so the next launch resumes, and keep
+          // mirroring later rotations.
           await _sidecar.persistSession();
+          await _sidecar.startSessionMirror();
+          _remoteAuthenticated = true;
+          await _markProvisioned();
           _phase = AppPhase.ready;
           notifyListeners();
           await loadMore();
@@ -182,12 +268,18 @@ class AppState extends ChangeNotifier {
     _cleanupSessionFiles();
     _photos.clear();
     _nextCursor = null;
-    _phase = AppPhase.loggedOut;
+    _remoteAuthenticated = false;
+    // Keep local data (index, cached previews) so the app stays usable; only
+    // a provisioned device has a "reconnect" state, never a first-run login.
+    _phase = _provisioned ? AppPhase.ready : AppPhase.onboarding;
     notifyListeners();
   }
 
   Future<void> loadMore() async {
     if (_loading) return;
+    // Remote-only: when we know the session is gone, don't hammer the server
+    // or surface a spurious error; local content renders instead.
+    if (_remoteAuthenticated == false) return;
     _loading = true;
     notifyListeners();
     try {
@@ -288,7 +380,18 @@ class AppState extends ChangeNotifier {
       if (f.existsSync()) {
         final dest = File('${_appDataDir() ?? Directory.current.path}/session.json');
         dest.writeAsStringSync(f.readAsStringSync(), flush: true);
+        _restrictPermissions(dest);
       }
+    } catch (_) {}
+  }
+
+  /// The session file holds a refresh token and saltedKeyPass — enough on its
+  /// own to re-authenticate as the account — so keep it owner-only. The Go
+  /// sidecar already writes 0600; this matches it for the copied file.
+  static void _restrictPermissions(File file) {
+    if (Platform.isWindows) return;
+    try {
+      Process.runSync('chmod', ['600', file.path]);
     } catch (_) {}
   }
 

@@ -184,7 +184,8 @@ class SettingsScreen extends StatelessWidget {
                 builder: (dialogContext) => AlertDialog(
                   title: const Text('Sign out?'),
                   content: const Text(
-                    'You will need to sign in again to browse the library.',
+                    'You will need to sign in again to load new photos. '
+                    'Cached previews, people and tags stay on this device.',
                   ),
                   actions: [
                     TextButton(

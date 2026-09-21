@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-09-21
+
+### Added
+
+- Offline access to local data: the app no longer gates everything behind the
+  Proton login. People, tags and cached previews open even when the session is
+  missing or expired; only remote work (loading new photos, people-tag sync)
+  needs a live session and is skipped rather than erroring.
+- A reconnect affordance for a device that has an account but whose session
+  can't be resumed: the top-bar menu shows **Reconnect**, and an empty gallery
+  explains that cached data is still available instead of showing the first-run
+  login.
+
+### Changed
+
+- `AppPhase` tracks only *local* readiness; remote authentication is now a
+  separate state (`remoteAuthenticated`), with a persisted `provisioned` flag
+  so a returning user is never mistaken for a fresh install.
+
+### Fixed
+
+- Sessions expired far sooner than they should on Android: Proton rotates the
+  refresh token on every access-token refresh and invalidates the old one, but
+  the rotated session was never copied back into secure storage, so the next
+  launch resumed with a consumed token and forced a full login. The embedded
+  server's session file is now mirrored continuously (a debounced directory
+  watcher) and flushed on app background.
+- The desktop session file holds a refresh token and `saltedKeyPass` but could
+  be world-readable; it is now written `0600` to match the Go sidecar.
+
 ## [0.11.0] - 2026-09-17
 
 ### Added

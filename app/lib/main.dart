@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -26,21 +28,50 @@ void main() {
   runApp(PhotonLibraryApp(state: state));
 }
 
-class PhotonLibraryApp extends StatelessWidget {
+class PhotonLibraryApp extends StatefulWidget {
   const PhotonLibraryApp({super.key, required this.state});
 
   final AppState state;
 
   @override
+  State<PhotonLibraryApp> createState() => _PhotonLibraryAppState();
+}
+
+class _PhotonLibraryAppState extends State<PhotonLibraryApp>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Proton rotates refresh tokens as the session runs; flush the latest
+    // before the process is suspended so the next launch can resume.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      unawaited(widget.state.flushSession());
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: state,
+      listenable: widget.state,
       builder: (context, _) {
-        final Widget home = switch (state.phase) {
+        final Widget home = switch (widget.state.phase) {
           AppPhase.booting =>
             const Scaffold(body: Center(child: CircularProgressIndicator())),
-          AppPhase.loggedOut => LoginScreen(state: state),
-          AppPhase.ready => HomeShell(state: state),
+          AppPhase.onboarding => LoginScreen(state: widget.state),
+          AppPhase.ready => HomeShell(state: widget.state),
         };
         return MaterialApp(
           navigatorKey: navigatorKey,

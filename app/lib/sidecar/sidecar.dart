@@ -29,6 +29,9 @@ class Sidecar {
   Process? _process;
   bool _startedHere = false;
 
+  StreamSubscription<FileSystemEvent>? _sessionWatch;
+  Timer? _sessionMirrorDebounce;
+
   String get baseUrl => 'http://127.0.0.1:$port';
 
   Future<bool> isHealthy() async {
@@ -121,6 +124,58 @@ class Sidecar {
     } catch (_) {}
   }
 
+  /// Whether a Proton session has ever been persisted on this device. Used to
+  /// tell "sign in again" (a stored session that no longer resumes) apart from
+  /// a genuine first run, so an expired session doesn't hide local content.
+  Future<bool> hasStoredSession() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final value = await _storage.read(key: _sessionKey);
+      return value != null && value.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Mirrors the embedded server's session file into secure storage whenever
+  /// it changes. Proton rotates refresh tokens on every access-token refresh
+  /// and the old token becomes unusable, so if a rotation is not captured the
+  /// next launch resumes with a dead token and forces a fresh login.
+  ///
+  /// Android-only; on desktop [AppState] copies the session file directly.
+  Future<void> startSessionMirror() async {
+    if (!Platform.isAndroid || _sessionWatch != null) return;
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      await dir.create(recursive: true);
+      // Capture whatever the server wrote on resume/login before watching, so
+      // a rotation that happened before the watcher attached isn't lost.
+      await persistSession();
+      _sessionWatch = dir.watch().listen((event) {
+        if (!event.path.endsWith('session.json')) return;
+        _sessionMirrorDebounce?.cancel();
+        _sessionMirrorDebounce = Timer(
+          const Duration(milliseconds: 250),
+          () => unawaited(persistSession()),
+        );
+      });
+    } catch (_) {
+      // Directory watching can fail on some devices; the app lifecycle hook
+      // still mirrors the session on background, so resuming stays viable.
+      _sessionWatch = null;
+    }
+  }
+
+  Future<void> stopSessionMirror() async {
+    _sessionMirrorDebounce?.cancel();
+    _sessionMirrorDebounce = null;
+    final watch = _sessionWatch;
+    _sessionWatch = null;
+    try {
+      await watch?.cancel();
+    } catch (_) {}
+  }
+
   Future<bool> _pollHealthy(Duration timeout) async {
     final client = ServeClient(url: baseUrl);
     try {
@@ -137,6 +192,7 @@ class Sidecar {
 
   Future<void> stop() async {
     if (Platform.isAndroid) {
+      await stopSessionMirror();
       try {
         await _serveChannel.invokeMethod<void>('stop');
       } catch (_) {}

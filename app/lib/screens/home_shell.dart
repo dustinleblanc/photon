@@ -6,6 +6,7 @@ import '../ml/detection.dart';
 import '../ml/faces.dart';
 import '../state/app_state.dart';
 import 'gallery_screen.dart';
+import 'login_screen.dart';
 import 'people_screen.dart';
 import 'person_detail_screen.dart';
 import 'settings_screen.dart';
@@ -441,6 +442,12 @@ class _TopBar extends StatelessWidget {
                         );
                       case 'sync':
                         await state.tagsSync.pullAndPush();
+                      case 'signin':
+                        await Navigator.of(context, rootNavigator: true).push(
+                          MaterialPageRoute(
+                            builder: (_) => LoginScreen(state: state),
+                          ),
+                        );
                       case 'signout':
                         state.logout();
                     }
@@ -461,16 +468,22 @@ class _TopBar extends StatelessWidget {
                       value: 'classify',
                       child: Text('Classify illustrations'),
                     ),
-                    if (state.tagsSync.enabled)
+                    if (state.tagsSync.enabled && state.remoteAuthenticated)
                       const PopupMenuItem(
                         value: 'sync',
                         child: Text('Sync people now'),
                       ),
                     const PopupMenuDivider(),
-                    const PopupMenuItem(
-                      value: 'signout',
-                      child: Text('Sign out'),
-                    ),
+                    if (state.remoteAuthenticated)
+                      const PopupMenuItem(
+                        value: 'signout',
+                        child: Text('Sign out'),
+                      )
+                    else
+                      const PopupMenuItem(
+                        value: 'signin',
+                        child: Text('Reconnect'),
+                      ),
                   ],
                 ),
                 const SizedBox(width: 8),

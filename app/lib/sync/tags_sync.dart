@@ -18,10 +18,15 @@ import '../ml/faces.dart';
 /// What syncs: name, aliases, centroid embedding, sample count. Contact links
 /// and per-face ignore flags stay device-local on purpose.
 class TagsSync extends ChangeNotifier {
-  TagsSync({required this.client, required this.index});
+  TagsSync({required this.client, required this.index, this.canSync});
 
   final ServeClient client;
   final DetectionIndex index;
+
+  /// Optional gate consulted before any network work. Sync is remote-only, so
+  /// the app supplies a check for whether a live Proton session is held and
+  /// skips syncing (silently) when it isn't.
+  final bool Function()? canSync;
 
   static const _storage = FlutterSecureStorage();
   static const _keyEnabled = 'photon_tags_sync_enabled';
@@ -79,6 +84,7 @@ class TagsSync extends ChangeNotifier {
   /// collapse into the running one.
   Future<void> pullAndPush() async {
     if (_busy) return;
+    if (canSync != null && !canSync!()) return;
     _busy = true;
     _error = null;
     notifyListeners();
