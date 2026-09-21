@@ -246,28 +246,31 @@ class _HomeShellState extends State<HomeShell> {
         );
         if (wide) {
           return Scaffold(
-            body: Row(
-              children: [
-                NavigationRail(
-                  selectedIndex: _section,
-                  onDestinationSelected: _selectSection,
-                  labelType: NavigationRailLabelType.all,
-                  leading: const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Icon(Icons.photo_library, size: 28),
+            body: SafeArea(
+              bottom: false,
+              child: Row(
+                children: [
+                  NavigationRail(
+                    selectedIndex: _section,
+                    onDestinationSelected: _selectSection,
+                    labelType: NavigationRailLabelType.all,
+                    leading: const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: Icon(Icons.photo_library, size: 28),
+                    ),
+                    destinations: [
+                      for (final d in _dests)
+                        NavigationRailDestination(
+                          icon: Icon(d.icon),
+                          selectedIcon: Icon(d.selectedIcon),
+                          label: Text(d.label),
+                        ),
+                    ],
                   ),
-                  destinations: [
-                    for (final d in _dests)
-                      NavigationRailDestination(
-                        icon: Icon(d.icon),
-                        selectedIcon: Icon(d.selectedIcon),
-                        label: Text(d.label),
-                      ),
-                  ],
-                ),
-                const VerticalDivider(width: 1),
-                Expanded(child: main),
-              ],
+                  const VerticalDivider(width: 1),
+                  Expanded(child: main),
+                ],
+              ),
             ),
           );
         }
@@ -355,6 +358,10 @@ class _TopBar extends StatelessWidget {
       color: Theme.of(context).colorScheme.surfaceContainerLow,
       child: Column(
         children: [
+          // Android 15 draws edge-to-edge (targetSdk 35) and this top bar is
+          // not an AppBar, so it has to reserve the status-bar inset itself or
+          // it renders underneath the system bar.
+          SizedBox(height: MediaQuery.paddingOf(context).top),
           SizedBox(
             height: 56,
             child: Row(
@@ -368,16 +375,22 @@ class _TopBar extends StatelessWidget {
                 else
                   const SizedBox(width: 8),
                 const SizedBox(width: 4),
-                Expanded(
-                  flex: 3,
+                ConstrainedBox(
+                  // Let the title take only the room it needs (capped so a long
+                  // name still ellipsizes) so the search field can expand into
+                  // the rest of the bar.
+                  constraints: BoxConstraints(
+                    maxWidth: MediaQuery.sizeOf(context).width * 0.4,
+                  ),
                   child: Text(
                     title,
                     style: Theme.of(context).textTheme.titleMedium,
                     overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
                   ),
                 ),
+                const SizedBox(width: 12),
                 Expanded(
-                  flex: 4,
                   child: _PeopleSearch(
                     state: state,
                     controller: search,
