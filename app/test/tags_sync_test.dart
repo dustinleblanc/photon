@@ -8,6 +8,8 @@ import 'package:photon_library/ml/detection.dart';
 import 'package:photon_library/ml/detection_index.dart';
 import 'package:photon_library/ml/faces.dart';
 
+import 'support/personas.dart';
+
 void main() {
   late Directory tmp;
   late DetectionIndex index;
@@ -319,16 +321,16 @@ void main() {
   test('ignoring a face untags and ignores it in every photo', () async {
     final alexFace = Float32List(192)..[0] = 1;
     final rileyFace = Float32List(192)..[1] = 1;
-    await index.upsertIdentity('Alex', alexFace);
-    await index.upsertIdentity('Riley', rileyFace);
+    await index.upsertIdentity(Personas.alex.name, alexFace);
+    await index.upsertIdentity(Personas.riley.name, rileyFace);
     // Several photos of the same unknown face, wrongly auto-tagged Alex.
     for (var i = 0; i < 3; i++) {
-      final e = entryWithFace('stranger-$i', rileyFace, name: 'Alex');
+      final e = entryWithFace('stranger-$i', rileyFace, name: Personas.alex.name);
       e.faces[0].similarity = 0.65;
       await index.put(e);
     }
     // An unrelated Alex face that must be left alone.
-    final keep = entryWithFace('alex-photo', alexFace, name: 'Alex');
+    final keep = entryWithFace('alex-photo', alexFace, name: Personas.alex.name);
     keep.faces[0].similarity = 0.8;
     await index.put(keep);
 
@@ -343,7 +345,7 @@ void main() {
     // A different face stays tagged.
     final other = index.facesFor('alex-photo').single;
     expect(other.ignored, isFalse);
-    expect(other.name, 'Alex');
+    expect(other.name, Personas.alex.name);
     // Ignored faces are not unnamed work.
     expect(
       index.unnamedFaces().map((f) => f.linkId),
@@ -354,38 +356,38 @@ void main() {
   test('correcting a name retags near-identical auto-tagged photos', () async {
     final alexFace = Float32List(192)..[0] = 1;
     final rileyFace = Float32List(192)..[1] = 1;
-    await index.upsertIdentity('Alex', alexFace);
-    await index.upsertIdentity('Riley', rileyFace);
+    await index.upsertIdentity(Personas.alex.name, alexFace);
+    await index.upsertIdentity(Personas.riley.name, rileyFace);
     // A batch of near-identical Riley photos wrongly auto-tagged as Alex.
-    final wrong1 = entryWithFace('riley-1', rileyFace, name: 'Alex');
+    final wrong1 = entryWithFace('riley-1', rileyFace, name: Personas.alex.name);
     wrong1.faces[0].similarity = 0.62;
     await index.put(wrong1);
-    final wrong2 = entryWithFace('riley-2', rileyFace, name: 'Alex');
+    final wrong2 = entryWithFace('riley-2', rileyFace, name: Personas.alex.name);
     wrong2.faces[0].similarity = 0.60;
     await index.put(wrong2);
     // The photo the user corrects by hand.
     await index.put(entryWithFace('riley-3', rileyFace));
 
-    await index.nameFace(linkId: 'riley-3', faceIndex: 0, name: 'Riley');
+    await index.nameFace(linkId: 'riley-3', faceIndex: 0, name: Personas.riley.name);
 
-    expect(index.facesFor('riley-1').single.name, 'Riley');
-    expect(index.facesFor('riley-2').single.name, 'Riley');
-    expect(index.facesFor('riley-3').single.name, 'Riley');
+    expect(index.facesFor('riley-1').single.name, Personas.riley.name);
+    expect(index.facesFor('riley-2').single.name, Personas.riley.name);
+    expect(index.facesFor('riley-3').single.name, Personas.riley.name);
   });
 
   test('correction never overrides a manually confirmed tag', () async {
     final alexFace = Float32List(192)..[0] = 1;
     final rileyFace = Float32List(192)..[1] = 1;
-    await index.upsertIdentity('Alex', alexFace);
-    await index.upsertIdentity('Riley', rileyFace);
-    final manual = entryWithFace('manual-alex', rileyFace, name: 'Alex');
+    await index.upsertIdentity(Personas.alex.name, alexFace);
+    await index.upsertIdentity(Personas.riley.name, rileyFace);
+    final manual = entryWithFace('manual-alex', rileyFace, name: Personas.alex.name);
     manual.faces[0].similarity = 1.0;
     await index.put(manual);
     await index.put(entryWithFace('riley-3', rileyFace));
 
-    await index.nameFace(linkId: 'riley-3', faceIndex: 0, name: 'Riley');
+    await index.nameFace(linkId: 'riley-3', faceIndex: 0, name: Personas.riley.name);
 
-    expect(index.facesFor('manual-alex').single.name, 'Alex');
+    expect(index.facesFor('manual-alex').single.name, Personas.alex.name);
   });
 
   test('correcting one person leaves unrelated auto-tags alone', () async {
@@ -692,16 +694,16 @@ void main() {
 
   test('a cleared auto-tag is remembered and not re-applied', () async {
     final e = emb(120);
-    await index.upsertIdentity('Alice', e);
+    await index.upsertIdentity(Personas.alice.name, e);
     await index.put(entryWithFace('photo-1', e));
 
     expect(await index.rematchUnnamed(), 1);
-    expect(index.facesFor('photo-1').single.name, 'Alice');
+    expect(index.facesFor('photo-1').single.name, Personas.alice.name);
 
     await index.clearFaceName('photo-1', 0);
     final cleared = index.facesFor('photo-1').single;
     expect(cleared.name, isNull);
-    expect(cleared.rejected, contains('Alice'));
+    expect(cleared.rejected, contains(Personas.alice.name));
 
     // The matcher still prefers Alice, but the rejection wins.
     expect(await index.rematchUnnamed(), 0);
@@ -710,54 +712,54 @@ void main() {
 
   test('naming a face by hand overrides an earlier rejection', () async {
     final e = emb(120);
-    await index.upsertIdentity('Alice', e);
+    await index.upsertIdentity(Personas.alice.name, e);
     await index.put(entryWithFace('photo-1', e));
 
     await index.rematchUnnamed();
     await index.clearFaceName('photo-1', 0);
-    expect(index.facesFor('photo-1').single.rejected, contains('Alice'));
+    expect(index.facesFor('photo-1').single.rejected, contains(Personas.alice.name));
 
-    await index.nameFace(linkId: 'photo-1', faceIndex: 0, name: 'Alice');
+    await index.nameFace(linkId: 'photo-1', faceIndex: 0, name: Personas.alice.name);
 
     final f = index.facesFor('photo-1').single;
-    expect(f.name, 'Alice');
-    expect(f.rejected, isNot(contains('Alice')));
+    expect(f.name, Personas.alice.name);
+    expect(f.rejected, isNot(contains(Personas.alice.name)));
   });
 
   test('correcting Alex to Riley propagates onto other Alex mistags', () async {
     final alex = Float32List(192)..[0] = 1;
     final riley = Float32List(192)..[1] = 1;
-    await index.upsertIdentity('Alex', alex);
+    await index.upsertIdentity(Personas.alex.name, alex);
 
     // Two faces of Riley, both auto-tagged Alex.
-    await index.put(entryWithFace('p1', riley, name: 'Alex'));
-    await index.put(entryWithFace('p2', riley, name: 'Alex'));
+    await index.put(entryWithFace('p1', riley, name: Personas.alex.name));
+    await index.put(entryWithFace('p2', riley, name: Personas.alex.name));
 
     final moved =
-        await index.nameFace(linkId: 'p1', faceIndex: 0, name: 'Riley');
+        await index.nameFace(linkId: 'p1', faceIndex: 0, name: Personas.riley.name);
 
     expect(moved, 1);
     final p2 = index.facesFor('p2').single;
-    expect(p2.name, 'Riley');
+    expect(p2.name, Personas.riley.name);
     // Recorded as confirmed so reconciliation can't revert it.
     expect(p2.similarity, 1.0);
     await index.reconcileAutoAssignedNames();
-    expect(index.facesFor('p2').single.name, 'Riley');
+    expect(index.facesFor('p2').single.name, Personas.riley.name);
   });
 
   test('bulk reject clears tags and stops re-matching', () async {
     final alex = Float32List(192)..[0] = 1;
-    await index.upsertIdentity('Alex', alex);
-    await index.put(entryWithFace('p1', alex, name: 'Alex'));
-    await index.put(entryWithFace('p2', alex, name: 'Alex'));
+    await index.upsertIdentity(Personas.alex.name, alex);
+    await index.put(entryWithFace('p1', alex, name: Personas.alex.name));
+    await index.put(entryWithFace('p2', alex, name: Personas.alex.name));
 
-    final n = await index.rejectPersonInPhotos('Alex', ['p1', 'p2']);
+    final n = await index.rejectPersonInPhotos(Personas.alex.name, ['p1', 'p2']);
     expect(n, 2);
 
     for (final id in ['p1', 'p2']) {
       final f = index.facesFor(id).single;
       expect(f.name, isNull);
-      expect(f.rejected, contains('Alex'));
+      expect(f.rejected, contains(Personas.alex.name));
     }
 
     // The matcher would still choose Alex, but the rejection blocks it.
