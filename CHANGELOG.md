@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   watcher) and flushed on app background.
 - The desktop session file holds a refresh token and `saltedKeyPass` but could
   be world-readable; it is now written `0600` to match the Go sidecar.
+- `make apk-install` / `apk-wifi` failed with "more than one device/emulator"
+  when the phone was reachable over both Wi-Fi and an mDNS TLS transport. The
+  install/shell and `dev-android` targets now target a single device
+  (`ANDROID_SERIAL`, else the first connected one).
 
 ## [0.11.0] - 2026-09-17
 

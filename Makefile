@@ -16,6 +16,13 @@ APP_DIR   := app
 PHOTON    := build/photon
 ADB       ?= $(shell command -v adb 2>/dev/null || echo $(HOME)/Library/Android/sdk/platform-tools/adb)
 ANDROID_APP_ID := com.dustinleblanc.photon.photon_library
+
+# Target selection for adb install/shell. Prefers ANDROID_SERIAL, otherwise the
+# first connected device. The same phone often shows up twice (a USB/tcp entry
+# plus an mDNS TLS entry), and a bare `adb install` then fails with "more than
+# one device/emulator".
+ADB_SERIAL ?= $(shell $(ADB) devices | awk '$$2=="device" {print $$1; exit}')
+ADB_TARGET = $(if $(ADB_SERIAL),-s $(ADB_SERIAL))
 PKGS      := ./...
 ROOT      := $(CURDIR)
 JAVA_HOME ?= /opt/homebrew/opt/openjdk@17
@@ -107,13 +114,11 @@ dev-mac: build ## Run the macOS app with hot reload (r=reload, R=restart, q=quit
 
 .PHONY: dev-android
 dev-android: android-wifi-connect ## Run on the phone over Wi-Fi with hot reload (r/R/q)
-	cd $(APP_DIR) && JAVA_HOME=$(JAVA_HOME) flutter run \
-	  -d "$$($(ADB) devices | awk '/device$$/ {print $$1; exit}')"
+	cd $(APP_DIR) && JAVA_HOME=$(JAVA_HOME) flutter run -d "$(ADB_SERIAL)"
 
 .PHONY: run-android
 run-android: android-wifi-connect ## Alias for dev-android
-	cd $(APP_DIR) && JAVA_HOME=$(JAVA_HOME) flutter run \
-	  -d "$$($(ADB) devices | awk '/device$$/ {print $$1; exit}')"
+	cd $(APP_DIR) && JAVA_HOME=$(JAVA_HOME) flutter run -d "$(ADB_SERIAL)"
 
 .PHONY: android-wifi-connect
 android-wifi-connect: ## Connect to the phone over Wi-Fi (auto-discovers it on the LAN)
@@ -148,9 +153,9 @@ android-wifi-disconnect: ## Drop the Wi-Fi adb connection
 
 .PHONY: apk-install
 apk-install: ## Install the built debug APK on the connected phone, then relaunch it
-	$(ADB) install -r $(APP_DIR)/build/app/outputs/flutter-apk/app-debug.apk
-	-@$(ADB) shell am force-stop $(ANDROID_APP_ID)
-	@$(ADB) shell am start -n $(ANDROID_APP_ID)/.MainActivity
+	$(ADB) $(ADB_TARGET) install -r $(APP_DIR)/build/app/outputs/flutter-apk/app-debug.apk
+	-@$(ADB) $(ADB_TARGET) shell am force-stop $(ANDROID_APP_ID)
+	@$(ADB) $(ADB_TARGET) shell am start -n $(ANDROID_APP_ID)/.MainActivity
 
 .PHONY: apk-wifi
 apk-wifi: android-wifi-connect build-apk ## Build the APK and push it to the phone over Wi-Fi
