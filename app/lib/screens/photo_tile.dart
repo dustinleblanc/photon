@@ -16,11 +16,15 @@ class PhotoTile extends StatefulWidget {
     required this.state,
     required this.linkId,
     required this.onTap,
+    this.selected = false,
   });
 
   final AppState state;
   final String linkId;
   final VoidCallback onTap;
+
+  /// Dims the tile and shows a check when the caller is in multi-select mode.
+  final bool selected;
 
   @override
   State<PhotoTile> createState() => _PhotoTileState();
@@ -47,34 +51,53 @@ class _PhotoTileState extends State<PhotoTile> {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: widget.onTap,
-      child: FutureBuilder(
-        future: _preview,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.done &&
-              snapshot.hasData) {
-            return Image.memory(
-              snapshot.data!,
-              fit: BoxFit.cover,
-              gaplessPlayback: true,
-            );
-          }
-          final theme = Theme.of(context);
-          return Container(
-            color: theme.colorScheme.surfaceContainerHighest,
-            child: Center(
-              child: snapshot.hasError
-                  ? Icon(
-                      Icons.broken_image_outlined,
-                      color: theme.colorScheme.outline,
-                    )
-                  : const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          FutureBuilder(
+            future: _preview,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.done &&
+                  snapshot.hasData) {
+                return Image.memory(
+                  snapshot.data!,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                );
+              }
+              final theme = Theme.of(context);
+              return Container(
+                color: theme.colorScheme.surfaceContainerHighest,
+                child: Center(
+                  child: snapshot.hasError
+                      ? Icon(
+                          Icons.broken_image_outlined,
+                          color: theme.colorScheme.outline,
+                        )
+                      : const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                ),
+              );
+            },
+          ),
+          if (widget.selected) ...[
+            Container(color: Colors.black38),
+            const Align(
+              alignment: Alignment.topRight,
+              child: Padding(
+                padding: EdgeInsets.all(4),
+                child: Icon(
+                  Icons.check_circle,
+                  color: Colors.white,
+                  size: 22,
+                ),
+              ),
             ),
-          );
-        },
+          ],
+        ],
       ),
     );
   }

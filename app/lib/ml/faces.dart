@@ -122,6 +122,13 @@ int sanitizeSamples(Object? raw) {
 /// ambiguous faces unnamed instead of confidently wrong.
 const double kFaceMatchMargin = 0.05;
 
+/// Extra similarity, over the person the tag is being moved away from, that a
+/// face must show the corrected identity before a correction propagates onto
+/// it. Used when retagging one face (Alex→Riley) to prune the same mistake
+/// elsewhere; slightly stricter than [kFaceMatchMargin] because propagated
+/// faces are recorded as confirmed.
+const double kCorrectionMargin = 0.06;
+
 /// Faces smaller than this fraction of the photo's area are treated as
 /// background crowd: detected but not auto-tagged, not shown in the
 /// unnamed-people worklist, and not stored as identity samples. They remain
@@ -295,7 +302,8 @@ class DetectedFace {
     this.name,
     this.similarity,
     this.ignored = false,
-  });
+    Set<String>? rejected,
+  }) : rejected = {...?rejected};
 
   factory DetectedFace.fromMap(Map<String, dynamic> map) => DetectedFace(
         rect: Rect.fromLTRB(
@@ -310,6 +318,7 @@ class DetectedFace {
         name: map['name'] as String?,
         similarity: (map['sim'] as num?)?.toDouble(),
         ignored: map['ign'] as bool? ?? false,
+        rejected: ((map['rej'] as List?) ?? const []).cast<String>().toSet(),
       );
 
   final Rect rect;
@@ -323,6 +332,33 @@ class DetectedFace {
   /// faces never count as unnamed and are skipped by auto-matching.
   bool ignored;
 
+  /// Canonical identities the user explicitly rejected for this face by
+  /// removing an auto-assigned tag. Auto-matching never re-applies a rejected
+  /// name here, so a correction sticks; manually naming the face clears that
+  /// name's rejection. Device-local, like [ignored] — face flags are not
+  /// synced.
+  final Set<String> rejected;
+
+  /// Copy with a few fields changed. [clearName] drops both the name and its
+  /// similarity (the "unnamed" state) while keeping the embedding, ignored
+  /// flag and rejections.
+  DetectedFace copyWith({
+    String? name,
+    double? similarity,
+    bool? ignored,
+    bool clearName = false,
+    Set<String>? rejected,
+  }) {
+    return DetectedFace(
+      rect: rect,
+      embedding: embedding,
+      name: clearName ? null : (name ?? this.name),
+      similarity: clearName ? null : (similarity ?? this.similarity),
+      ignored: ignored ?? this.ignored,
+      rejected: rejected ?? this.rejected,
+    );
+  }
+
   Map<String, dynamic> toMap() => {
         'x': rect.left,
         'y': rect.top,
@@ -332,6 +368,7 @@ class DetectedFace {
         'name': name,
         'sim': similarity,
         if (ignored) 'ign': true,
+        if (rejected.isNotEmpty) 'rej': rejected.toList(),
       };
 }
 
@@ -536,7 +573,7 @@ void autoMatchFaces(
     final face = faces[i];
     final tiny = face.rect.width * face.rect.height < kMinAutoFaceArea;
     final name = tiny ? null : matcher.match(face.embedding);
-    if (name == null || taken.contains(name)) {
+    if (name == null || taken.contains(name) || face.rejected.contains(name)) {
       face.name = null;
       face.similarity = null;
       continue;

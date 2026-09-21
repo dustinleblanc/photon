@@ -113,11 +113,25 @@ class _FaceDetailScreenState extends State<FaceDetailScreen> {
 
   Future<void> _clear() async {
     if (_busy) return;
+    final faces = _index.lookup(widget.linkId)?.faces;
+    final removed =
+        faces != null && widget.faceIndex < faces.length
+            ? faces[widget.faceIndex].name
+            : null;
     setState(() => _busy = true);
     try {
       await _index.clearFaceName(widget.linkId, widget.faceIndex);
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+    if (mounted && removed != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Removed $removed — this face won\'t be matched to them again',
+          ),
+        ),
+      );
     }
   }
 

@@ -689,4 +689,79 @@ void main() {
 
     expect(index.facesFor('q-photo').single.name, isNull);
   });
+
+  test('a cleared auto-tag is remembered and not re-applied', () async {
+    final e = emb(120);
+    await index.upsertIdentity('Alice', e);
+    await index.put(entryWithFace('photo-1', e));
+
+    expect(await index.rematchUnnamed(), 1);
+    expect(index.facesFor('photo-1').single.name, 'Alice');
+
+    await index.clearFaceName('photo-1', 0);
+    final cleared = index.facesFor('photo-1').single;
+    expect(cleared.name, isNull);
+    expect(cleared.rejected, contains('Alice'));
+
+    // The matcher still prefers Alice, but the rejection wins.
+    expect(await index.rematchUnnamed(), 0);
+    expect(index.facesFor('photo-1').single.name, isNull);
+  });
+
+  test('naming a face by hand overrides an earlier rejection', () async {
+    final e = emb(120);
+    await index.upsertIdentity('Alice', e);
+    await index.put(entryWithFace('photo-1', e));
+
+    await index.rematchUnnamed();
+    await index.clearFaceName('photo-1', 0);
+    expect(index.facesFor('photo-1').single.rejected, contains('Alice'));
+
+    await index.nameFace(linkId: 'photo-1', faceIndex: 0, name: 'Alice');
+
+    final f = index.facesFor('photo-1').single;
+    expect(f.name, 'Alice');
+    expect(f.rejected, isNot(contains('Alice')));
+  });
+
+  test('correcting Alex to Riley propagates onto other Alex mistags', () async {
+    final alex = Float32List(192)..[0] = 1;
+    final riley = Float32List(192)..[1] = 1;
+    await index.upsertIdentity('Alex', alex);
+
+    // Two faces of Riley, both auto-tagged Alex.
+    await index.put(entryWithFace('p1', riley, name: 'Alex'));
+    await index.put(entryWithFace('p2', riley, name: 'Alex'));
+
+    final moved =
+        await index.nameFace(linkId: 'p1', faceIndex: 0, name: 'Riley');
+
+    expect(moved, 1);
+    final p2 = index.facesFor('p2').single;
+    expect(p2.name, 'Riley');
+    // Recorded as confirmed so reconciliation can't revert it.
+    expect(p2.similarity, 1.0);
+    await index.reconcileAutoAssignedNames();
+    expect(index.facesFor('p2').single.name, 'Riley');
+  });
+
+  test('bulk reject clears tags and stops re-matching', () async {
+    final alex = Float32List(192)..[0] = 1;
+    await index.upsertIdentity('Alex', alex);
+    await index.put(entryWithFace('p1', alex, name: 'Alex'));
+    await index.put(entryWithFace('p2', alex, name: 'Alex'));
+
+    final n = await index.rejectPersonInPhotos('Alex', ['p1', 'p2']);
+    expect(n, 2);
+
+    for (final id in ['p1', 'p2']) {
+      final f = index.facesFor(id).single;
+      expect(f.name, isNull);
+      expect(f.rejected, contains('Alex'));
+    }
+
+    // The matcher would still choose Alex, but the rejection blocks it.
+    expect(await index.rematchUnnamed(), 0);
+    expect(index.facesFor('p1').single.name, isNull);
+  });
 }

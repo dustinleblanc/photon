@@ -109,28 +109,25 @@ class DetectionIndex extends ChangeNotifier {
                 () {
                   final resolved = matcher.match(f.embedding);
                   final autoMatchable = _isAutoMatchable(f);
-                  if (resolved == f.name && autoMatchable) {
+                  if (resolved == f.name &&
+                      autoMatchable &&
+                      !f.rejected.contains(resolved)) {
                     return f;
                   }
                   changed = true;
-                  if (resolved == null || !autoMatchable) {
-                    return DetectedFace(
-                      rect: f.rect,
-                      embedding: f.embedding,
-                      ignored: f.ignored,
-                    );
+                  if (resolved == null ||
+                      !autoMatchable ||
+                      f.rejected.contains(resolved)) {
+                    return f.copyWith(clearName: true);
                   }
                   // The rules changed since this tag was written; reassign
                   // to whoever matches now instead of just clearing.
-                  return DetectedFace(
-                    rect: f.rect,
-                    embedding: f.embedding,
+                  return f.copyWith(
                     name: resolved,
                     similarity: matcher.scoreFor(
                       f.embedding,
                       matcher.identityFor(resolved),
                     ),
-                    ignored: f.ignored,
                   );
                 }()
               else
@@ -507,11 +504,7 @@ class DetectionIndex extends ChangeNotifier {
             () {
               changed = true;
               count++;
-              return DetectedFace(
-                rect: f.rect,
-                embedding: f.embedding,
-                ignored: true,
-              );
+              return f.copyWith(clearName: true, ignored: true);
             }()
           else
             f,
@@ -636,7 +629,7 @@ class DetectionIndex extends ChangeNotifier {
         faces: [
           for (final f in entry.faces)
             if (f.name == name)
-              DetectedFace(rect: f.rect, embedding: f.embedding, ignored: f.ignored)
+              f.copyWith(clearName: true)
             else
               f,
         ],
@@ -661,6 +654,42 @@ class DetectionIndex extends ChangeNotifier {
       );
     }
     _notify();
+    return updated;
+  }
+
+  /// Removes [name]'s tag from the given photos in bulk and remembers the
+  /// rejection on each affected face, so auto-matching won't put [name] back
+  /// (the bulk counterpart of [clearFaceName]). Faces stay indexed. Returns
+  /// the number of photos changed.
+  Future<int> rejectPersonInPhotos(String name, Iterable<String> linkIds) async {
+    final box = _box;
+    if (box == null) return 0;
+    final canonical = identityForName(name)?.name ?? name.trim();
+    if (canonical.isEmpty) return 0;
+    var updated = 0;
+    for (final linkId in linkIds) {
+      final entry = lookup(linkId);
+      if (entry == null) continue;
+      var changed = false;
+      final faces = [
+        for (final f in entry.faces)
+          if (f.name == canonical && !f.ignored)
+            () {
+              changed = true;
+              return f.copyWith(
+                clearName: true,
+                rejected: {...f.rejected, canonical},
+              );
+            }()
+          else
+            f,
+      ];
+      if (changed) {
+        await _writeEntry(entry.copyWith(faces: faces));
+        updated++;
+      }
+    }
+    if (updated > 0) _notify();
     return updated;
   }
 
@@ -732,11 +761,7 @@ class DetectionIndex extends ChangeNotifier {
             faces: [
               for (var i = 0; i < entry.faces.length; i++)
                 if (i == s.index)
-                  DetectedFace(
-                    rect: entry.faces[i].rect,
-                    embedding: entry.faces[i].embedding,
-                    ignored: entry.faces[i].ignored,
-                  )
+                  entry.faces[i].copyWith(clearName: true)
                 else
                   entry.faces[i],
             ],
@@ -779,11 +804,7 @@ class DetectionIndex extends ChangeNotifier {
           faces: [
             for (var i = 0; i < entry.faces.length; i++)
               if (drop.contains(i))
-                DetectedFace(
-                  rect: entry.faces[i].rect,
-                  embedding: entry.faces[i].embedding,
-                  ignored: entry.faces[i].ignored,
-                )
+                entry.faces[i].copyWith(clearName: true)
               else
                 entry.faces[i],
           ],
@@ -843,7 +864,8 @@ class DetectionIndex extends ChangeNotifier {
         faces: [
           for (final f in entry.faces)
             // Unname but keep the embedding so the face can be re-matched.
-            DetectedFace(rect: f.rect, embedding: f.embedding, ignored: f.ignored),
+            // Rejections are cleared too: this is a full reset of tags.
+            f.copyWith(clearName: true, rejected: const <String>{}),
         ],
       ));
       updated++;
@@ -1059,6 +1081,9 @@ class DetectionIndex extends ChangeNotifier {
     }
     final face = entry.faces[faceIndex];
     if (face.embedding.isEmpty) return -1;
+    // The name this face carried before the correction, if any. Used below to
+    // propagate the correction onto other faces with the same wrong tag.
+    final previous = face.name;
 
     final trimmed = name.trim();
     if (trimmed.isEmpty) return -1;
@@ -1078,11 +1103,11 @@ class DetectionIndex extends ChangeNotifier {
         contactPhotoUri: contactPhotoUri,
       );
     }
-    entry.faces[faceIndex] = DetectedFace(
-      rect: face.rect,
-      embedding: face.embedding,
+    entry.faces[faceIndex] = face.copyWith(
       name: canonical,
       similarity: 1.0,
+      // A manual assignment overrides an earlier rejection of this name.
+      rejected: {...face.rejected}..remove(canonical),
     );
     await put(entry);
 
@@ -1106,10 +1131,8 @@ class DetectionIndex extends ChangeNotifier {
           if (f.ignored) continue;
           if (f.name == null) {
             final name = matcher.match(f.embedding);
-            if (name == null) continue;
-            other.faces[j] = DetectedFace(
-              rect: f.rect,
-              embedding: f.embedding,
+            if (name == null || f.rejected.contains(name)) continue;
+            other.faces[j] = f.copyWith(
               name: name,
               similarity: matcher.scoreFor(
                 f.embedding,
@@ -1121,12 +1144,41 @@ class DetectionIndex extends ChangeNotifier {
             continue;
           }
           if (f.name == canonical) continue;
+          // Confident correction propagation: the user just moved a face from
+          // [previous] to [canonical]. Other auto-tags of [previous] that are
+          // closer to [canonical] are the same mistake, so move them even
+          // while [canonical] is too new to win `matcher.match` outright.
+          // They are recorded as confirmed (similarity 1.0) so they stick
+          // instead of being reverted by the next reconciliation, and so they
+          // sharpen [canonical] for the next correction.
+          if (previous != null &&
+              previous != canonical &&
+              f.name == previous &&
+              (f.similarity ?? 0) < 1.0 &&
+              _isAutoMatchable(f) &&
+              !hasCanonical &&
+              !f.rejected.contains(canonical)) {
+            final target = matcher.identityFor(canonical);
+            final previousId = identityForName(previous);
+            final newScore = matcher.scoreFor(f.embedding, target);
+            final oldScore = previousId == null
+                ? 0.0
+                : matcher.scoreFor(f.embedding, previousId);
+            if (newScore >= matcher.thresholdFor(target) &&
+                newScore - oldScore >= kCorrectionMargin) {
+              other.faces[j] = f.copyWith(name: canonical, similarity: 1.0);
+              hasCanonical = true;
+              changed = true;
+              continue;
+            }
+          }
           // Correction propagation: a face already tagged as someone else
           // but which now matches [canonical] more strongly is a mis-tag.
           // Manually confirmed faces are never overridden, and the new name
           // must beat the old one by the ambiguity margin.
           if ((f.similarity ?? 0) >= 1.0) continue;
           if (hasCanonical) continue;
+          if (f.rejected.contains(canonical)) continue;
           if (matcher.match(f.embedding) != canonical) continue;
           final target = matcher.identityFor(canonical);
           final current = identityForName(f.name!);
@@ -1134,12 +1186,7 @@ class DetectionIndex extends ChangeNotifier {
           final oldScore =
               current == null ? 0.0 : matcher.scoreFor(f.embedding, current);
           if (newScore - oldScore < kFaceMatchMargin) continue;
-          other.faces[j] = DetectedFace(
-            rect: f.rect,
-            embedding: f.embedding,
-            name: canonical,
-            similarity: newScore,
-          );
+          other.faces[j] = f.copyWith(name: canonical, similarity: newScore);
           hasCanonical = true;
           changed = true;
         }
@@ -1154,17 +1201,21 @@ class DetectionIndex extends ChangeNotifier {
     return matched;
   }
 
-  /// Clears the name from a single face (the embedding is kept, so the face
-  /// can be re-matched later).
+  /// Clears the name from a single face and remembers the rejection, so
+  /// auto-matching won't re-apply the same wrong tag on the next
+  /// [rematchUnnamed]. The embedding is kept, so the face can still be named
+  /// by hand later (which clears that name's rejection).
   Future<void> clearFaceName(String linkId, int faceIndex) async {
     final entry = lookup(linkId);
     if (entry == null || faceIndex < 0 || faceIndex >= entry.faces.length) {
       return;
     }
     final f = entry.faces[faceIndex];
-    entry.faces[faceIndex] = DetectedFace(
-      rect: f.rect,
-      embedding: f.embedding,
+    final rejected = {...f.rejected};
+    if (f.name != null) rejected.add(f.name!);
+    entry.faces[faceIndex] = f.copyWith(
+      clearName: true,
+      rejected: rejected,
     );
     await put(entry);
   }
@@ -1200,19 +1251,24 @@ class DetectionIndex extends ChangeNotifier {
     if (detections != null && trimmed != oldName) {
       for (final key in detections.keys.toList()) {
         final entry = lookup(key as String);
-        if (entry == null || !entry.faces.any((f) => f.name == oldName)) {
+        if (entry == null ||
+            !entry.faces.any(
+              (f) => f.name == oldName || f.rejected.contains(oldName),
+            )) {
           continue;
         }
         await _writeEntry(
           entry.copyWith(
             faces: [
               for (final f in entry.faces)
-                if (f.name == oldName)
-                  DetectedFace(
-                    rect: f.rect,
-                    embedding: f.embedding,
-                    name: trimmed,
-                    similarity: f.similarity,
+                if (f.name == oldName || f.rejected.contains(oldName))
+                  f.copyWith(
+                    name: f.name == oldName ? trimmed : f.name,
+                    // Keep rejections pointing at the renamed identity.
+                    rejected: {
+                      for (final n in f.rejected)
+                        if (n == oldName) trimmed else n,
+                    },
                   )
                 else
                   f,
@@ -1299,21 +1355,31 @@ class DetectionIndex extends ChangeNotifier {
     if (detections != null) {
       for (final key in detections.keys.toList()) {
         final entry = lookup(key as String);
-        if (entry == null || !entry.faces.any((f) => oldNames.contains(f.name))) {
+        if (entry == null ||
+            !entry.faces.any(
+              (f) =>
+                  oldNames.contains(f.name) ||
+                  f.rejected.any(oldNames.contains),
+            )) {
           continue;
         }
         await _writeEntry(
           entry.copyWith(
             faces: [
               for (final f in entry.faces)
-                oldNames.contains(f.name)
-                    ? DetectedFace(
-                        rect: f.rect,
-                        embedding: f.embedding,
-                        name: merged.name,
-                        similarity: f.similarity,
-                      )
-                    : f,
+                if (oldNames.contains(f.name) ||
+                    f.rejected.any(oldNames.contains))
+                  f.copyWith(
+                    name: oldNames.contains(f.name) ? merged.name : f.name,
+                    // Rejections of any merged-away name now apply to the
+                    // merged identity.
+                    rejected: {
+                      for (final n in f.rejected)
+                        oldNames.contains(n) ? merged.name : n,
+                    },
+                  )
+                else
+                  f,
             ],
           ),
         );
@@ -1423,22 +1489,28 @@ class DetectionIndex extends ChangeNotifier {
     for (final key in detections.keys.toList()) {
       final entry = lookup(key as String);
       if (entry == null ||
-          !entry.faces.any((f) => renames.containsKey(f.name))) {
+          !entry.faces.any(
+            (f) =>
+                renames.containsKey(f.name) ||
+                f.rejected.any(renames.containsKey),
+          )) {
         continue;
       }
       await _writeEntry(
         entry.copyWith(
           faces: [
             for (final f in entry.faces)
-              renames.containsKey(f.name)
-                  ? DetectedFace(
-                      rect: f.rect,
-                      embedding: f.embedding,
-                      name: renames[f.name],
-                      similarity: f.similarity,
-                      ignored: f.ignored,
-                    )
-                  : f,
+              if (renames.containsKey(f.name) ||
+                  f.rejected.any(renames.containsKey))
+                f.copyWith(
+                  name: renames[f.name] ?? f.name,
+                  // A rejected name follows the identity to its new name.
+                  rejected: {
+                    for (final n in f.rejected) renames[n] ?? n,
+                  },
+                )
+              else
+                f,
           ],
         ),
       );
@@ -1462,17 +1534,16 @@ class DetectionIndex extends ChangeNotifier {
           if (f.name == null && !f.ignored && _isAutoMatchable(f))
             () {
               final name = matcher.match(f.embedding);
-              if (name == null) return f;
+              // Respect a manual rejection: never re-apply a tag the user
+              // cleared from this face.
+              if (name == null || f.rejected.contains(name)) return f;
               changed = true;
-              return DetectedFace(
-                rect: f.rect,
-                embedding: f.embedding,
+              return f.copyWith(
                 name: name,
                 similarity: matcher.scoreFor(
                   f.embedding,
                   matcher.identityFor(name),
                 ),
-                ignored: f.ignored,
               );
             }()
           else
@@ -1508,7 +1579,7 @@ class DetectionIndex extends ChangeNotifier {
             faces: [
               for (final f in entry.faces)
                 if (f.name == name)
-                  DetectedFace(rect: f.rect, embedding: f.embedding)
+                  f.copyWith(clearName: true)
                 else
                   f,
             ],

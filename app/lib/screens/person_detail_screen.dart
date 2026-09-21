@@ -37,6 +37,12 @@ class _PersonDetailScreenState extends State<PersonDetailScreen> {
   final ScrollController _scroll = ScrollController();
   var _loadingAll = false;
 
+  /// Multi-select mode for bulk-correcting mistags ("[name] is not in these
+  /// photos").
+  bool _selecting = false;
+  bool _busy = false;
+  final Set<String> _selected = {};
+
   DetectionIndex get _index => widget.state.detectionIndex;
   AppState get _state => widget.state;
 
@@ -83,6 +89,52 @@ class _PersonDetailScreenState extends State<PersonDetailScreen> {
         ),
       ),
     );
+  }
+
+  void _enterSelection() {
+    setState(() {
+      _selecting = true;
+      _selected.clear();
+    });
+  }
+
+  void _exitSelection() {
+    setState(() {
+      _selecting = false;
+      _selected.clear();
+    });
+  }
+
+  void _toggleSelected(String linkId) {
+    setState(() {
+      if (!_selected.remove(linkId)) _selected.add(linkId);
+    });
+  }
+
+  /// Clears [name] from every selected photo at once and denies it there, so
+  /// a page of mistags can be corrected without opening each one.
+  Future<void> _rejectSelected(PersonIdentity id) async {
+    if (_selected.isEmpty || _busy) return;
+    setState(() => _busy = true);
+    try {
+      final count = await _index.rejectPersonInPhotos(id.name, _selected);
+      if (!mounted) return;
+      setState(() {
+        _selecting = false;
+        _selected.clear();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            count == 1
+                ? 'Removed ${id.name} from 1 photo'
+                : 'Removed ${id.name} from $count photos',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _rename() async {
@@ -287,6 +339,55 @@ class _PersonDetailScreenState extends State<PersonDetailScreen> {
     if (mounted) setState(() {});
   }
 
+  Widget _selectionBar(PersonIdentity id) {
+    final all = [
+      for (final p in _state.photos)
+        if (_matches(p.linkId)) p.linkId,
+    ];
+    final allSelected = all.isNotEmpty && _selected.length == all.length;
+    return SafeArea(
+      top: false,
+      child: Material(
+        color: Theme.of(context).colorScheme.surfaceContainerHigh,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(4, 8, 8, 8),
+          child: Row(
+            children: [
+              IconButton(
+                tooltip: 'Cancel',
+                icon: const Icon(Icons.close),
+                onPressed: _busy ? null : _exitSelection,
+              ),
+              Expanded(child: Text('${_selected.length} selected')),
+              TextButton(
+                onPressed: all.isEmpty
+                    ? null
+                    : () => setState(() {
+                          if (allSelected) {
+                            _selected.clear();
+                          } else {
+                            _selected
+                              ..clear()
+                              ..addAll(all);
+                          }
+                        }),
+                child: Text(allSelected ? 'Clear' : 'Select all'),
+              ),
+              const SizedBox(width: 4),
+              FilledButton.icon(
+                onPressed: _selected.isEmpty || _busy
+                    ? null
+                    : () => _rejectSelected(id),
+                icon: const Icon(Icons.person_off),
+                label: Text(_busy ? 'Working…' : 'Not them'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -309,6 +410,8 @@ class _PersonDetailScreenState extends State<PersonDetailScreen> {
             tooltip: 'Person actions',
             onSelected: (action) async {
                   switch (action) {
+                    case 'select':
+                      _enterSelection();
                     case 'rename':
                       await _rename();
                     case 'cover':
@@ -325,6 +428,10 @@ class _PersonDetailScreenState extends State<PersonDetailScreen> {
                   }
                 },
                 itemBuilder: (context) => [
+                  const PopupMenuItem(
+                    value: 'select',
+                    child: Text('Select photos…'),
+                  ),
                   const PopupMenuItem(
                     value: 'rename',
                     child: Text('Rename & aliases'),
@@ -364,6 +471,7 @@ class _PersonDetailScreenState extends State<PersonDetailScreen> {
             title: Text(id.name),
             actions: [actionsMenu],
           ),
+          bottomNavigationBar: _selecting ? _selectionBar(id) : null,
           body: CustomScrollView(
             controller: _scroll,
             slivers: [
@@ -437,7 +545,10 @@ class _PersonDetailScreenState extends State<PersonDetailScreen> {
                     return PhotoTile(
                       state: _state,
                       linkId: photo.linkId,
-                      onTap: () => _openPhoto(photo.linkId),
+                      selected: _selected.contains(photo.linkId),
+                      onTap: () => _selecting
+                          ? _toggleSelected(photo.linkId)
+                          : _openPhoto(photo.linkId),
                     );
                   },
                 ),

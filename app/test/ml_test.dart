@@ -63,12 +63,14 @@ void main() {
     expect(cosineSimilarity(a, Float32List(3)), closeTo(0.0, 1e-9));
   });
 
-  test('DetectedFace roundtrips name, similarity and embedding', () {
+  test('DetectedFace roundtrips name, similarity, embedding and rejections',
+      () {
     final face = DetectedFace(
       rect: const Rect.fromLTRB(0.1, 0.2, 0.4, 0.6),
       embedding: Float32List.fromList([0.5, -0.25, 0.0, 1.0]),
       name: 'Mom',
       similarity: 0.82,
+      rejected: {'Alice', 'Bob'},
     );
 
     final restored = DetectedFace.fromMap(face.toMap());
@@ -77,6 +79,7 @@ void main() {
     expect(restored.name, 'Mom');
     expect(restored.similarity, 0.82);
     expect(restored.embedding, face.embedding);
+    expect(restored.rejected, {'Alice', 'Bob'});
   });
 
   test('DetectedEntry roundtrips detected faces', () {

@@ -145,9 +145,21 @@ class _PeoplePanelState extends State<PeoplePanel> {
   }
 
   Future<void> _clearName(int index) async {
+    final faces = _faces;
+    final removed =
+        faces != null && index < faces.length ? faces[index].name : null;
     await _index.clearFaceName(widget.linkId, index);
     if (!mounted) return;
     setState(() => _faces = _index.facesFor(widget.linkId));
+    if (removed != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Removed $removed — this face won\'t be matched to them again',
+          ),
+        ),
+      );
+    }
   }
 
   @override

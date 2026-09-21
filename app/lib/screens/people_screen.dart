@@ -283,6 +283,9 @@ class _PeopleScreenState extends State<PeopleScreen> {
         return Scaffold(
           appBar: AppBar(
             automaticallyImplyLeading: false,
+            // Embedded under the shell's own top bar, which already reserves
+            // the status-bar inset; don't reserve it a second time.
+            primary: !shell,
             toolbarHeight: shell ? 48 : null,
             title: shell
                 ? const Text('People')
